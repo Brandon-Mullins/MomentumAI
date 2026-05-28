@@ -1,2 +1,2 @@
 # MomentumAI
-Momentum is an AI-powered productivity and life management app that helps users organize tasks, reduce mental overload, and build better routines. Built with React, TypeScript, Node.js, Express, and Supabase, it features AI daily planning, dashboards, and personalized productivity tools.
+MomentumAI is an AI-powered job copilot built for test engineers, engineering technicians, validation specialists, and automotive quality professionals. The platform helps users discover better-matching jobs, analyze role fit, generate tailored resumes and cover letters, track applications, and streamline the job search process without relying solely on LinkedIn. Built with React, TypeScript, Node.js, Express, and Supabase.
