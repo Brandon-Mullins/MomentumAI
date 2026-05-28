@@ -6,6 +6,17 @@ The first version supports manual job intake: paste a job description from a com
 
 ## MVP features
 
+### AI Job Intelligence Engine
+
+- Resume parsing for TXT/MD and backend support for PDF/DOCX extraction when readable in the local environment
+- Structured resume intelligence: contact info, skills, experience signals, education, certifications, tools, and industry keywords
+- Advanced job extraction from pasted descriptions, URLs, or recruiter email text with a manual review fallback
+- Multi-factor job scoring with fit labels, score breakdowns, missing qualifications, red flags, growth signals, notes, and decision scorecards
+- Application packet builder with tailored resume summary, skills, bullet suggestions, cover letter, recruiter message, LinkedIn message, and interview talking points
+- Analytics for status mix, response rate, companies applied to, matched skills, missing skills, and sources
+- Safety-first review flow: generated content is draft-only and must be reviewed before submission
+
+
 - React + TypeScript front end
 - Node/Express API
 - Supabase-ready persistence with in-memory demo fallback
