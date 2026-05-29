@@ -11,6 +11,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
     "electron:install": "node node_modules/electron/install.js",
+    "doctor": "node scripts/doctor.cjs",
     "postinstall": "node node_modules/electron/install.js"
   },
   "dependencies": {
