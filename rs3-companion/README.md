@@ -45,6 +45,39 @@ npm run preview
 - Session XP tracker overlay
 - World map arrows and tile hints for active quest steps
 
-## License
+## Troubleshooting (Windows)
 
-MIT
+### The companion did not open
+
+RS3 Companion is **not** part of the RS3 game client. It is a separate desktop app that only opens when you run:
+
+```cmd
+cd C:\Users\bmull\MomentumAI\rs3-companion
+npm run dev
+```
+
+Keep that terminal window **open**. If it returns to `C:\...>` immediately, something failed — scroll up and read the error.
+
+### Checklist
+
+1. **Alt+Tab** — the window may be behind fullscreen RS3. Look for **RS3 Companion** or **Electron** in the taskbar.
+2. **Terminal still running?** — `npm run dev` should keep running. Do not close the Command Prompt while using the app.
+3. **Try production mode** if dev mode fails:
+
+```cmd
+npm run build
+npm run preview
+```
+
+4. **Allow through Windows Defender** if Electron was blocked.
+5. **Node version** — run `node -v` (need 18+).
+
+### Still stuck?
+
+Run this and paste the full output:
+
+```cmd
+cd C:\Users\bmull\MomentumAI\rs3-companion
+npm run dev
+```
+

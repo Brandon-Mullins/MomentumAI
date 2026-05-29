@@ -12,7 +12,7 @@ function createMainWindow(): void {
     height: 760,
     minWidth: 960,
     minHeight: 640,
-    show: false,
+    show: isDev,
     autoHideMenuBar: true,
     backgroundColor: '#1a1408',
     title: 'RS3 Companion',
@@ -25,6 +25,12 @@ function createMainWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
+    mainWindow?.show()
+    mainWindow?.focus()
+  })
+
+  mainWindow.webContents.on('did-fail-load', (_event, code, description, url) => {
+    console.error('[RS3 Companion] Failed to load window:', { code, description, url })
     mainWindow?.show()
   })
 
@@ -123,6 +129,12 @@ app.whenReady().then(() => {
       createMainWindow()
     }
   })
+}).catch((error: unknown) => {
+  console.error('[RS3 Companion] Failed to start:', error)
+})
+
+process.on('uncaughtException', (error) => {
+  console.error('[RS3 Companion] Uncaught exception:', error)
 })
 
 app.on('window-all-closed', () => {
