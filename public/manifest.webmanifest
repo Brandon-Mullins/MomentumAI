@@ -1,0 +1,34 @@
+{
+  "name": "MomentumAI Job Copilot",
+  "short_name": "MomentumAI",
+  "description": "AI job copilot for test engineers, technicians, validation, quality, and automotive testing roles.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#020617",
+  "theme_color": "#4f46e5",
+  "categories": ["productivity", "business", "education"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Review jobs",
+      "short_name": "Jobs",
+      "description": "Open the pending job review queue.",
+      "url": "/?view=pending"
+    },
+    {
+      "name": "Add a job",
+      "short_name": "Add",
+      "description": "Import or paste a job posting.",
+      "url": "/?view=search"
+    }
+  ]
+}

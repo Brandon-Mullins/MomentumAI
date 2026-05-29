@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">MomentumAI Job Copilot icon</title>
+  <defs>
+    <linearGradient id="bg" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6366f1" />
+      <stop offset="0.52" stop-color="#8b5cf6" />
+      <stop offset="1" stop-color="#ec4899" />
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(158 128) rotate(51.3) scale(376)">
+      <stop stop-color="#ffffff" stop-opacity="0.95" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="#020617" />
+  <rect x="36" y="36" width="440" height="440" rx="96" fill="url(#bg)" />
+  <rect x="36" y="36" width="440" height="440" rx="96" fill="url(#glow)" opacity="0.32" />
+  <path d="M151 334V170h48l56 91 56-91h50v164h-45v-95l-47 75h-29l-46-74v94h-43Z" fill="white" />
+  <path d="M372 124c7 24 22 39 46 46-24 7-39 22-46 46-7-24-22-39-46-46 24-7 39-22 46-46Z" fill="#f8fafc" opacity="0.92" />
+  <path d="M126 378h260" stroke="white" stroke-width="28" stroke-linecap="round" opacity="0.82" />
+</svg>
