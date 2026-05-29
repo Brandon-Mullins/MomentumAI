@@ -1,6 +1,6 @@
 # MomentumAI Job Copilot
 
-MomentumAI Job Copilot is an MVP web app for people trying to break into test engineering, engineering technician, quality, validation, and automotive testing roles without relying only on LinkedIn.
+MomentumAI is an AI-powered job copilot built for test engineers, engineering technicians, validation specialists, and automotive quality professionals. The platform helps users discover better-matching jobs, analyze role fit, generate tailored resumes and cover letters, track applications, and streamline the job search process without relying solely on LinkedIn. Built with React, TypeScript, Node.js, Express, and Supabase.
 
 The first version supports manual job intake: paste a job description from a company site, job board, recruiter email, or saved posting. The app scores the match against the user's profile, puts roles into a pending review queue, and generates resume and cover letter drafts only after the user chooses to review a job.
 
@@ -16,6 +16,7 @@ The first version supports manual job intake: paste a job description from a com
 - Analytics for status mix, response rate, companies applied to, matched skills, missing skills, and sources
 - Safety-first review flow: generated content is draft-only and must be reviewed before submission
 
+### Core app
 
 - React + TypeScript front end
 - Node/Express API
@@ -46,6 +47,19 @@ The app runs with demo in-memory data when Supabase credentials are not configur
 3. Copy `.env.example` to `.env`.
 4. Fill in `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
 5. Restart `npm run dev`.
+
+## Mobile and store-readiness path
+
+The current product is a responsive web app. The fastest path toward Apple/Samsung distribution is to make the web app installable first, then wrap the same app with Capacitor or React Native once authentication, payments, and backend persistence are production-ready.
+
+Near-term priorities:
+
+- PWA installability and offline-friendly loading
+- Authentication and per-user data isolation
+- Subscription/paywall experiments
+- Resume/job import reliability
+- Mobile-first onboarding and notification strategy
+- Privacy, accuracy, and generated-content safety reviews
 
 ## Future integrations
 
