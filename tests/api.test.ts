@@ -100,3 +100,25 @@ test("invalid tokens are rejected and reset endpoint returns safe demo response"
     assert.ok(reset.resetToken);
   });
 });
+
+test("email intelligence sync creates activity and timeline", async () => {
+  await withServer(async (baseUrl) => {
+    const email = `email-${Date.now()}@example.com`;
+    const registered = await json<{ token: string }>(
+      await fetch(`${baseUrl}/api/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Email Tester", email, password: "password123" })
+      })
+    );
+    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${registered.token}` };
+    await json(await fetch(`${baseUrl}/api/email/connect/mock`, { method: "POST", headers }));
+    const synced = await json<{ activity: { totalMessages: number; interviewRequests: number }; timeline: unknown[]; followUps: unknown[] }>(
+      await fetch(`${baseUrl}/api/email/sync`, { method: "POST", headers })
+    );
+    assert.ok(synced.activity.totalMessages >= 1);
+    assert.ok(synced.activity.interviewRequests >= 1);
+    assert.ok(synced.timeline.length >= 1);
+    assert.ok(synced.followUps.length >= 1);
+  });
+});

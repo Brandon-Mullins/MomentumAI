@@ -133,3 +133,33 @@ test("buildResumeStudio creates professional editable resume assets", () => {
   assert.ok(studio.warnings.some((warning) => warning.includes("Do not claim")));
   assert.ok(studio.includedSections.some((section) => section.section === "Core Skills"));
 });
+
+import { buildFollowUps, buildTimelineFromEmails, classifyEmail, summarizeEmailActivity } from "../shared/emailIntelligence";
+
+test("email intelligence classifies recruiter activity and builds timeline", () => {
+  const message = classifyEmail({
+    from: "recruiter@ford.com",
+    subject: "Interview request for Validation Technician at Ford",
+    body: "Can we schedule a phone screen for the validation technician role?"
+  });
+  const job: JobPosting = {
+    id: "email-job-1",
+    createdAt: new Date().toISOString(),
+    status: "Applied",
+    ...scoreJob(defaultProfile, {
+      title: "Validation Technician",
+      company: "Ford",
+      location: "Dearborn, MI",
+      source: "Email test",
+      description: "Validation technician role with diagnostics, Jira, and test cases."
+    })
+  };
+  const timeline = buildTimelineFromEmails([message], [job]);
+  const followUps = buildFollowUps(defaultProfile, [message], [job]);
+  const summary = summarizeEmailActivity(["mock"], [message], timeline, followUps);
+
+  assert.equal(message.classification, "interview_request");
+  assert.equal(timeline[0].suggestedStatus, "Interview");
+  assert.equal(summary.interviewRequests, 1);
+  assert.ok(followUps[0].message.includes(defaultProfile.name));
+});

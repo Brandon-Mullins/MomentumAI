@@ -43,8 +43,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input, Label, Select, Textarea } from "./components/ui/form";
 import { Skeleton } from "./components/ui/skeleton";
 import type { AnalyticsData, ApplicationStatus, AuthResponse, AuthUser, CareerCoachReport, DashboardData, GeneratedApplication, ImportedJobDraft, InterviewSimulator, JobDecisionScorecard, JobPosting, MissingSkillsMarketplace, MomentumScore, ResumeParseResult, UserProfile, UserSettings } from "../shared/types";
+import type { EmailActivitySummary, EmailMessage, FollowUpSuggestion, TimelineEvent } from "../shared/emailIntelligence";
 
-type View = "pending" | "saved" | "profile" | "search" | "tracker" | "coach";
+type View = "pending" | "saved" | "profile" | "search" | "tracker" | "coach" | "email";
 type Theme = "light" | "dark";
 type IconComponent = typeof LayoutDashboard;
 
@@ -56,7 +57,8 @@ const navItems: Array<{ id: View; label: string; icon: IconComponent; helper: st
   { id: "search", label: "Add jobs", icon: Search, helper: "Manual intake", shortcut: "3" },
   { id: "profile", label: "Profile", icon: UserRound, helper: "Preferences", shortcut: "4" },
   { id: "tracker", label: "Pipeline", icon: ClipboardCheck, helper: "Applications", shortcut: "5" },
-  { id: "coach", label: "Career coach", icon: Target, helper: "Skills + interviews", shortcut: "6" }
+  { id: "coach", label: "Career coach", icon: Target, helper: "Skills + interviews", shortcut: "6" },
+  { id: "email", label: "Email intel", icon: Bell, helper: "Recruiter activity", shortcut: "7" }
 ];
 
 function buildLocalDemoDashboard(): DashboardData {
@@ -588,6 +590,7 @@ function App() {
                 {dashboard.momentumScore && <MomentumScorePanel score={dashboard.momentumScore} />}
                 <AnalyticsGrid analytics={analytics} />
                 {dashboard.analytics && <IntelligenceAnalyticsPanel analytics={dashboard.analytics} jobs={jobs} />}
+                {dashboard.emailActivity && <EmailActivityWidgets activity={dashboard.emailActivity} setView={setView} />}
 
                 {view === "pending" && <JobBoard title="Pending review" description="Review each match before saving, skipping, tailoring documents, or applying. Nothing is submitted automatically." jobs={pendingJobs} empty="No pending jobs match your current search. Paste a job description from any source to create a new match." onStatus={updateStatus} onGenerate={generateForJob} onSaveNotes={saveJobNotes} onSaveScorecard={saveJobScorecard} isBusy={isBusy} emptyAction={<Button variant="gradient" onClick={() => setView("search")}>Import your first job</Button>} />}
                 {view === "saved" && <JobBoard title="Saved roles" description="Your shortlist for deeper company research and resume tailoring." jobs={savedJobs} empty="No saved jobs yet. Save a strong match from the review queue." onStatus={updateStatus} onGenerate={generateForJob} onSaveNotes={saveJobNotes} onSaveScorecard={saveJobScorecard} isBusy={isBusy} emptyAction={<Button variant="gradient" onClick={() => setView("pending")}>Review pending jobs</Button>} />}
@@ -595,6 +598,7 @@ function App() {
                 {view === "profile" && <ProfileEditor profileDraft={profileDraft} setProfileDraft={setProfileDraft} titlesDraft={titlesDraft} setTitlesDraft={setTitlesDraft} skillsDraft={skillsDraft} setSkillsDraft={setSkillsDraft} saveProfile={async () => { await saveProfile(); updateOnboardingProgress(50); }} isBusy={isBusy} completion={calculateProfileCompletion({ ...profileDraft, preferredTitles: splitLines(titlesDraft), skills: splitLines(skillsDraft) })} onResumeFile={handleResumeFile} resumeParseResult={resumeParseResult} />}
                 {view === "tracker" && <ApplicationTracker jobs={trackerJobs} onGenerate={generateForJob} onStatus={updateStatus} progressPercent={progressPercent} />}
                 {view === "coach" && <CareerCoachPage jobs={jobs} profile={dashboard.profile} localDemoMode={localDemoMode} />}
+                {view === "email" && <EmailIntelligenceCenter onRefresh={loadDashboard} />}
               </motion.div>
             </AnimatePresence>
           )}
@@ -901,6 +905,63 @@ function ApplicationTracker({ jobs, onGenerate, onStatus, progressPercent }: { j
   const maxCount = Math.max(1, ...statusCounts.map((item) => item.count));
 
   return <div className="grid gap-4"><Card><CardContent className="grid gap-6 p-6 lg:grid-cols-[1fr_360px]"><div><CardTitle className="text-2xl">Application pipeline</CardTitle><CardDescription>Move jobs from saved to applied, interview, offer, or rejected as your search progresses.</CardDescription><div className="mt-5"><ProgressLabel label="Pipeline progress" value={progressPercent} /></div></div><div className="flex items-end gap-2 rounded-[1.25rem] bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]" aria-label="Application status chart">{statusCounts.map((item) => <div key={item.status} className="flex flex-1 flex-col items-center gap-2"><div className="flex h-28 w-full items-end rounded-full bg-white/70 p-1 dark:bg-slate-950/40"><motion.div className="w-full rounded-full bg-gradient-to-t from-indigo-500 to-fuchsia-400" initial={{ height: 0 }} animate={{ height: `${Math.max(8, (item.count / maxCount) * 100)}%` }} transition={{ duration: 0.7, ease: "easeOut" }} /></div><span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">{item.status.slice(0, 3)}</span></div>)}</div></CardContent></Card><div className="grid gap-4 overflow-x-auto lg:grid-cols-5">{statusCounts.map(({ status }) => <Card key={status} className="min-h-[260px] min-w-[220px]"><CardHeader className="p-4"><CardTitle className="text-base">{status}</CardTitle></CardHeader><CardContent className="space-y-3 p-4 pt-0">{jobs.filter((job) => job.status === status).length === 0 && <p className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-400 dark:border-white/10">No roles yet.</p>}{jobs.filter((job) => job.status === status).map((job) => <div key={job.id} className="rounded-2xl bg-slate-950/[0.04] p-3 transition hover:-translate-y-0.5 dark:bg-white/[0.06]"><p className="font-semibold text-slate-900 dark:text-white">{job.title}</p><p className="text-sm text-slate-500 dark:text-slate-400">{job.company}</p><div className="mt-3 flex gap-2"><Button variant="secondary" size="sm" onClick={() => onGenerate(job)}>Docs</Button>{status !== "Interview" && <Button variant="ghost" size="sm" onClick={() => onStatus(job, "Interview")}>Interview</Button>}</div></div>)}</CardContent></Card>)}</div></div>;
+}
+
+function EmailActivityWidgets({ activity, setView }: { activity: EmailActivitySummary; setView: (view: View) => void }) {
+  const widgets = [
+    { label: "Recruiter emails", value: activity.recruiterOutreach, helper: "Outreach detected", icon: Bell },
+    { label: "Interview requests", value: activity.interviewRequests, helper: "Needs review", icon: ClipboardCheck },
+    { label: "Follow-ups", value: activity.followUpsDue, helper: "Suggested drafts", icon: Send }
+  ];
+  return <div className="grid gap-4 md:grid-cols-3">{widgets.map((item) => { const Icon = item.icon; return <button key={item.label} onClick={() => setView("email")} className="rounded-[1.5rem] border border-white/70 bg-white/75 p-5 text-left shadow-xl shadow-slate-950/[0.06] transition hover:-translate-y-1 dark:border-white/10 dark:bg-slate-950/55"><div className="flex items-center justify-between"><div className="grid h-10 w-10 place-items-center rounded-2xl bg-indigo-500/10 text-indigo-500"><Icon className="h-5 w-5" /></div><Badge>{activity.connectedProviders.join(", ") || "mock"}</Badge></div><p className="mt-4 text-3xl font-semibold tracking-[-0.06em] text-slate-950 dark:text-white">{item.value}</p><p className="mt-1 text-sm font-semibold text-slate-600 dark:text-slate-300">{item.label}</p><p className="mt-1 text-xs text-slate-500 dark:text-slate-500">{item.helper}</p></button>; })}</div>;
+}
+
+function EmailIntelligenceCenter({ onRefresh }: { onRefresh: () => Promise<void> }) {
+  const [activity, setActivity] = useState<EmailActivitySummary | null>(null);
+  const [messages, setMessages] = useState<EmailMessage[]>([]);
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [followUps, setFollowUps] = useState<FollowUpSuggestion[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const loadActivity = async () => {
+    const result = await request<{ activity: EmailActivitySummary; messages: EmailMessage[]; timeline: TimelineEvent[]; followUps: FollowUpSuggestion[] }>("/api/email/activity");
+    setActivity(result.activity);
+    setMessages(result.messages);
+    setTimeline(result.timeline);
+    setFollowUps(result.followUps);
+  };
+
+  useEffect(() => { loadActivity().catch(() => toast.error("Could not load email activity.")); }, []);
+
+  const connect = async (provider: "gmail" | "outlook" | "mock") => {
+    setBusy(true);
+    try {
+      const result = await request<{ connectedProviders: string[]; mockMode: boolean; authorizationUrl: string }>(`/api/email/connect/${provider}`, { method: "POST" });
+      toast.success(result.mockMode ? `${provider} mock mode connected.` : `${provider} OAuth connection started.`);
+      await sync();
+    } finally { setBusy(false); }
+  };
+
+  const sync = async () => {
+    setBusy(true);
+    try {
+      const result = await request<{ activity: EmailActivitySummary; messages: EmailMessage[]; timeline: TimelineEvent[]; followUps: FollowUpSuggestion[] }>("/api/email/sync", { method: "POST" });
+      setActivity(result.activity);
+      setMessages(result.messages);
+      setTimeline(result.timeline);
+      setFollowUps(result.followUps);
+      await onRefresh();
+      toast.success("Email intelligence synced. Review suggested pipeline updates before acting.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Email sync failed.");
+    } finally { setBusy(false); }
+  };
+
+  return <div className="grid gap-4"><Card><CardHeader className="flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><CardTitle className="text-2xl">Email Intelligence Center</CardTitle><CardDescription>Connect Gmail or Outlook architecture, detect recruiter activity, update your timeline, and draft follow-ups. MomentumAI never sends email automatically.</CardDescription></div><div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={() => connect("gmail")} disabled={busy}>Connect Gmail</Button><Button variant="secondary" onClick={() => connect("outlook")} disabled={busy}>Connect Outlook</Button><Button variant="gradient" onClick={() => connect("mock")} disabled={busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Sync demo inbox</Button></div></CardHeader><CardContent><div className="grid gap-4 md:grid-cols-5"><EmailStat label="Messages" value={activity?.totalMessages ?? 0} /><EmailStat label="Recruiters" value={activity?.recruiterOutreach ?? 0} /><EmailStat label="Interviews" value={activity?.interviewRequests ?? 0} /><EmailStat label="Rejections" value={activity?.rejections ?? 0} /><EmailStat label="Offers" value={activity?.offers ?? 0} /></div><div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100"><strong>Review-before-action:</strong> MomentumAI can detect recruiter emails and draft replies, but it will never send messages or update external systems without you.</div></CardContent></Card><div className="grid gap-4 xl:grid-cols-[1fr_380px]"><Card><CardHeader><CardTitle>Application timeline</CardTitle><CardDescription>Recruiter interactions and suggested status changes in chronological order.</CardDescription></CardHeader><CardContent className="space-y-3">{timeline.length ? timeline.map((event) => <div key={event.id} className="rounded-2xl bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold">{event.title}</p>{event.suggestedStatus && <Badge className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">Suggest: {event.suggestedStatus}</Badge>}</div><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{event.description}</p><p className="mt-2 text-xs text-slate-400">{new Date(event.occurredAt).toLocaleString()} · {event.company ?? "Company unknown"} · review required</p></div>) : <EmptyState icon={Bell} title="No email activity yet" description="Connect Gmail, Outlook, or demo inbox to detect recruiter messages, interviews, confirmations, rejections, and offers." action={<Button variant="gradient" onClick={() => connect("mock")}>Try demo inbox</Button>} />}</CardContent></Card><div className="grid gap-4"><Card><CardHeader><CardTitle>Follow-up assistant</CardTitle><CardDescription>Drafts only. You review and send manually.</CardDescription></CardHeader><CardContent className="space-y-3">{followUps.length ? followUps.map((item) => <div key={item.id} className="rounded-2xl bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><div className="flex items-center justify-between gap-2"><p className="font-semibold">{item.subject}</p><Badge>{item.tone}</Badge></div><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{item.reason}</p><Textarea className="mt-3 text-xs" rows={7} value={item.message} readOnly /><Button className="mt-2" variant="secondary" size="sm" onClick={() => navigator.clipboard.writeText(item.message).then(() => toast.success("Follow-up copied."))}>Copy draft</Button></div>) : <p className="text-sm text-slate-500 dark:text-slate-400">No follow-ups due yet. Sync email after applying or interviewing.</p>}</CardContent></Card><Card><CardHeader><CardTitle>Detected emails</CardTitle></CardHeader><CardContent className="space-y-2">{messages.slice(0, 5).map((message) => <div key={message.id} className="rounded-xl bg-slate-950/[0.04] p-3 text-sm dark:bg-white/[0.06]"><p className="font-semibold">{message.subject}</p><p className="text-slate-500 dark:text-slate-400">{message.classification} · {message.confidence}%</p></div>)}</CardContent></Card></div></div></div>;
+}
+
+function EmailStat({ label, value }: { label: string; value: number }) {
+  return <div className="rounded-2xl bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><p className="text-2xl font-semibold tracking-[-0.05em] text-slate-950 dark:text-white">{value}</p><p className="text-xs font-semibold text-slate-500 dark:text-slate-400">{label}</p></div>;
 }
 
 function CareerCoachPage({ jobs, profile, localDemoMode }: { jobs: JobPosting[]; profile: UserProfile; localDemoMode: boolean }) {

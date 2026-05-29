@@ -242,10 +242,15 @@ export interface InterviewSimulator {
   closingAdvice: string[];
 }
 
+import type { EmailActivitySummary, EmailMessage, TimelineEvent } from "./emailIntelligence";
+
 export interface DashboardData {
   user?: AuthUser;
   settings?: UserSettings;
   momentumScore?: MomentumScore;
+  emailActivity?: EmailActivitySummary;
+  emailMessages?: EmailMessage[];
+  timeline?: TimelineEvent[];
   profile: UserProfile;
   jobs: JobPosting[];
   applications: JobPosting[];

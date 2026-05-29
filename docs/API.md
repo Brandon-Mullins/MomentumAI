@@ -57,3 +57,12 @@ When `ALLOW_DEMO_AUTH` is not `false`, unauthenticated local requests use the de
 - Imported text is sanitized and capped before scoring.
 - Invalid session tokens return `401`.
 - Auth and analysis endpoints are rate-limited in memory for the MVP.
+
+## Email intelligence
+
+- `GET /api/email/providers` - provider connection state and OAuth URLs for Gmail/Outlook/mock.
+- `POST /api/email/connect/:provider` - connect `gmail`, `outlook`, or `mock` provider. Gmail/Outlook return OAuth architecture placeholders when credentials are unavailable.
+- `POST /api/email/sync` - fetch recent provider messages, classify recruiter activity, build timeline events, and suggest pipeline updates.
+- `GET /api/email/activity` - email summary, messages, timeline, and follow-up drafts.
+
+MomentumAI never sends email automatically. Follow-up and thank-you notes are draft-only.

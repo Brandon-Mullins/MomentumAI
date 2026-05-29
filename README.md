@@ -129,3 +129,15 @@ The app now includes a public-facing SaaS landing experience before authenticati
 - FAQ and social proof placeholders
 - Post-registration onboarding flow for resume import, target roles, salary/location preferences, first job import, and first Momentum Score™
 - SEO/OpenGraph metadata for a production marketing launch
+
+## Email Intelligence Center
+
+MomentumAI now includes a user-scoped email intelligence layer:
+
+- Gmail and Outlook OAuth architecture with mock/demo fallback
+- Recruiter outreach, interview request, confirmation, rejection, and offer detection
+- Timeline events and suggested application status updates
+- Follow-up, thank-you, and recruiter message drafts
+- Dashboard widgets for recruiter activity, email activity, and follow-up reminders
+
+The system follows review-before-action: it never sends emails automatically.

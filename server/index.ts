@@ -18,6 +18,7 @@ import {
   scoreJob
 } from "../shared/matching";
 import { defaultProfile, seedJobs } from "../shared/seedData";
+import { applyEmailPipelineSuggestions, buildFollowUps, buildTimelineFromEmails, classifyEmail, providerFor, summarizeEmailActivity, type EmailMessage, type EmailProvider, type TimelineEvent } from "../shared/emailIntelligence";
 import type {
   ApplicationStatus,
   JobDecisionScorecard,
@@ -71,6 +72,9 @@ interface DemoUser {
 interface WorkspaceData {
   profile: UserProfile;
   jobs: JobPosting[];
+  emailProviders: EmailProvider[];
+  emailMessages: EmailMessage[];
+  timeline: TimelineEvent[];
 }
 
 interface RequestWithUser extends express.Request {
@@ -169,7 +173,13 @@ function seedWorkspace(userId: string, profileSeed: UserProfile = defaultProfile
     status: "Pending" as ApplicationStatus,
     ...scoreJob(profile, job)
   }));
-  const workspace = { profile, jobs };
+  const messages = [
+    classifyEmail({ provider: "mock", from: "recruiter@ford.com", subject: "Interview request for Automotive Validation Technician at Ford", body: "Your background looks aligned with our Automotive Validation Technician role. Are you available for a phone screen next week?" }),
+    classifyEmail({ provider: "mock", from: "jobs@bosch.com", subject: "Thank you for applying to Bosch Quality Technician", body: "We received your application and our recruiting team will review it shortly." })
+  ];
+  const timeline = buildTimelineFromEmails(messages, jobs);
+  applyEmailPipelineSuggestions(jobs, timeline);
+  const workspace = { profile, jobs, emailProviders: ["mock" as EmailProvider], emailMessages: messages, timeline };
   workspaces.set(userId, workspace);
   return workspace;
 }
@@ -424,7 +434,7 @@ app.get("/api/dashboard", (req: RequestWithUser, res) => {
   const user = currentUser(req);
   const workspace = currentWorkspace(req);
   const sortedJobs = [...workspace.jobs].sort((a, b) => b.matchScore - a.matchScore);
-  res.json({ user: publicUser(user), settings: user.settings, profile: workspace.profile, jobs: sortedJobs, applications: sortedJobs.filter((job) => ["Saved", "Applied", "Interview", "Rejected", "Offer"].includes(job.status)), analytics: buildAnalytics(sortedJobs), momentumScore: buildMomentumScore(workspace.profile, sortedJobs) });
+  res.json({ user: publicUser(user), settings: user.settings, profile: workspace.profile, jobs: sortedJobs, applications: sortedJobs.filter((job) => ["Saved", "Applied", "Interview", "Rejected", "Offer"].includes(job.status)), analytics: buildAnalytics(sortedJobs), momentumScore: buildMomentumScore(workspace.profile, sortedJobs), emailActivity: summarizeEmailActivity(workspace.emailProviders, workspace.emailMessages, workspace.timeline, buildFollowUps(workspace.profile, workspace.emailMessages, sortedJobs)), emailMessages: workspace.emailMessages, timeline: workspace.timeline });
 });
 
 app.get("/api/analytics", (req: RequestWithUser, res) => res.json(buildAnalytics(currentWorkspace(req).jobs)));
@@ -568,13 +578,50 @@ app.get("/api/jobs/:id/skills-marketplace", enforceAnalysisLimit, (req: RequestW
   res.json(buildMissingSkillsMarketplace(workspace.profile, job));
 });
 
+app.get("/api/email/providers", (req: RequestWithUser, res) => {
+  const workspace = currentWorkspace(req);
+  const providers: EmailProvider[] = ["gmail", "outlook", "mock"];
+  res.json({
+    connectedProviders: workspace.emailProviders,
+    providers: providers.map((provider) => ({ provider, authorizationUrl: providerFor(provider).getAuthorizationUrl(currentUser(req).id), connected: workspace.emailProviders.includes(provider) }))
+  });
+});
+
+app.post("/api/email/connect/:provider", async (req: RequestWithUser, res) => {
+  const provider = String(req.params.provider) as EmailProvider;
+  if (!["gmail", "outlook", "mock"].includes(provider)) return res.status(400).json({ error: "Unsupported email provider" });
+  const workspace = currentWorkspace(req);
+  if (!workspace.emailProviders.includes(provider)) workspace.emailProviders.push(provider);
+  res.json({ connectedProviders: workspace.emailProviders, authorizationUrl: providerFor(provider).getAuthorizationUrl(currentUser(req).id), mockMode: provider === "mock" || !process.env[provider === "gmail" ? "GMAIL_CLIENT_ID" : "OUTLOOK_CLIENT_ID"] });
+});
+
+app.post("/api/email/sync", async (req: RequestWithUser, res) => {
+  const workspace = currentWorkspace(req);
+  const providers = workspace.emailProviders.length ? workspace.emailProviders : (["mock"] as EmailProvider[]);
+  const messages = (await Promise.all(providers.map((provider) => providerFor(provider).fetchRecentMessages(currentUser(req).id)))).flat().map(classifyEmail);
+  const existingIds = new Set(workspace.emailMessages.map((message) => message.id));
+  workspace.emailMessages = [...messages.filter((message) => !existingIds.has(message.id)), ...workspace.emailMessages].slice(0, 100);
+  workspace.timeline = buildTimelineFromEmails(workspace.emailMessages, workspace.jobs);
+  applyEmailPipelineSuggestions(workspace.jobs, workspace.timeline);
+  const followUps = buildFollowUps(workspace.profile, workspace.emailMessages, workspace.jobs);
+  res.json({ activity: summarizeEmailActivity(providers, workspace.emailMessages, workspace.timeline, followUps), messages: workspace.emailMessages, timeline: workspace.timeline, followUps });
+});
+
+app.get("/api/email/activity", (req: RequestWithUser, res) => {
+  const workspace = currentWorkspace(req);
+  const followUps = buildFollowUps(workspace.profile, workspace.emailMessages, workspace.jobs);
+  res.json({ activity: summarizeEmailActivity(workspace.emailProviders, workspace.emailMessages, workspace.timeline, followUps), messages: workspace.emailMessages, timeline: workspace.timeline, followUps });
+});
+
+
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);
   res.status(500).json({ error: "Internal server error" });
 });
 
 if (process.env.NODE_ENV !== "test") {
-  app.listen(port, () => console.log(`MomentumAI job copilot API running on http://localhost:${port}`));
+  
+app.listen(port, () => console.log(`MomentumAI job copilot API running on http://localhost:${port}`));
 }
 
 export { app, buildMomentumScore };
