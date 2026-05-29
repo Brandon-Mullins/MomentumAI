@@ -200,3 +200,31 @@ test("resume studio templates generate distinct professional LaTeX", () => {
   assert.ok(modern.resumeTex.includes("Tools \\& Projects"));
   assert.ok(modern.resumeTex.includes("Education \\& Certifications"));
 });
+
+import { activationJobDraftReady, buildActivationFirstMatchSummary, buildActivationProfileReview, hasMeasurableAchievement } from "../shared/activation";
+
+test("activation helpers score profile extraction and first match summary", () => {
+  const parsed = parseResumeText("Jordan Test\\njordan@example.com\\nValidation technician with Jira, Python, diagnostics, automotive test cases and root cause work.");
+  const review = buildActivationProfileReview(parsed, { ...defaultProfile, ...parsed.profileDraft });
+  assert.ok(review.overallConfidence > 0);
+  assert.ok(review.resumeCompleteness > 0);
+  assert.ok(review.fields.some((field) => field.field === "Skills"));
+  assert.equal(hasMeasurableAchievement("Completed 42 validation test cases"), true);
+
+  const job: JobPosting = {
+    id: "activation-job",
+    createdAt: new Date().toISOString(),
+    status: "Pending",
+    ...scoreJob(defaultProfile, {
+      title: "Automotive Validation Technician",
+      company: "Ford",
+      location: "Dearborn, MI",
+      source: "Activation test",
+      description: "Automotive validation with CAN, Jira, diagnostics, test cases, PPAP."
+    })
+  };
+  const summary = buildActivationFirstMatchSummary(job, 81, 79);
+  assert.ok(summary.headline.includes(`${job.matchScore}%`));
+  assert.ok(summary.projectedScore >= job.matchScore);
+  assert.equal(activationJobDraftReady({ title: "A", company: "B", location: "C", source: "D", description: "Long enough job description", confidence: 80, extractionNotes: [], requiredSkills: [] }), true);
+});

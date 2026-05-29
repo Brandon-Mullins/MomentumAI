@@ -33,6 +33,7 @@ import {
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
+import { buildActivationFirstMatchSummary, buildActivationProfileReview, activationJobDraftReady, type ActivationProfileReview } from "../shared/activation";
 import { buildAnalytics, buildCareerCoachReport, buildInterviewSimulator, buildMissingSkillsMarketplace, generateApplication as generateLocalApplication, scoreJob } from "../shared/matching";
 import { buildResumeStudio, getResumeStudioExportOptions, type CoverLetterStudioStyle, type ResumePageLength, type ResumeTemplate } from "../shared/resumeStudio";
 import { defaultProfile, seedJobs } from "../shared/seedData";
@@ -608,7 +609,7 @@ function App() {
       <CommandPalette open={commandOpen} setOpen={setCommandOpen} commandQuery={commandQuery} setCommandQuery={setCommandQuery} setView={setView} setTheme={setTheme} theme={theme} jobs={jobs} generateForJob={generateForJob} />
       <ApplicationDialog generated={generated} activeJob={activeJob} profile={dashboard?.profile ?? null} setGenerated={setGenerated} onApplied={(job) => updateStatus(job, "Applied")} />
       <SettingsDialog open={settingsOpen} setOpen={setSettingsOpen} user={authUser} onSave={saveSettings} isBusy={isBusy} />
-      <OnboardingDialog open={showOnboarding && !localDemoMode} onComplete={completeOnboarding} setView={setView} setProgress={updateOnboardingProgress} />
+      <ActivationEngine open={showOnboarding && !localDemoMode} onComplete={completeOnboarding} setView={setView} setProgress={updateOnboardingProgress} initialProfile={profileDraft} refreshDashboard={loadDashboard} />
     </div>
   );
 }
@@ -1132,16 +1133,160 @@ function OverleafInstructions() {
 function DocumentBox({ title, value, onCopy, onExport, copyLabel = "Copy text", exportLabel = "Download PDF" }: { title: string; value: string; onCopy: () => void; onExport: () => void; copyLabel?: string; exportLabel?: string }) {
   return <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.04]"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">{title}</h3><div className="flex gap-2"><Button variant="secondary" size="sm" onClick={onCopy}>{copyLabel}</Button><Button variant="secondary" size="sm" onClick={onExport}><Download className="h-4 w-4" /> {exportLabel}</Button></div></div><div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-white/10 dark:bg-slate-950/50"><Textarea value={value} readOnly rows={18} className="border-0 bg-transparent font-mono text-xs leading-5 shadow-none" /></div></div>;
 }
-function OnboardingDialog({ open, onComplete, setView, setProgress }: { open: boolean; onComplete: () => void; setView: (view: View) => void; setProgress: (progress: number) => void }) {
-  const steps = [
-    { icon: UploadCloud, title: "Upload or paste resume", text: "Parse your resume into skills, tools, experience, education, and profile strength.", view: "profile" as View, progress: 25 },
-    { icon: Target, title: "Choose target roles", text: "Pick test engineer, technician, quality, validation, or automotive testing paths.", view: "profile" as View, progress: 50 },
-    { icon: CircleDollarSign, title: "Set salary and location", text: "Tell MomentumAI your pay range, commute limits, and remote/hybrid preferences.", view: "profile" as View, progress: 50 },
-    { icon: Search, title: "Add your first job", text: "Paste a job posting or use the browser extension to capture one from anywhere.", view: "search" as View, progress: 75 },
-    { icon: Gauge, title: "Generate Momentum Score™", text: "See resume strength, market competitiveness, job match, and interview readiness.", view: "pending" as View, progress: 100 }
-  ];
-  return <Dialog open={open} onOpenChange={(next) => !next && onComplete()}><DialogContent className="max-h-[92vh] max-w-5xl overflow-y-auto"><div className="p-5 md:p-8"><DialogHeader><Badge className="w-fit bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">New user onboarding</Badge><DialogTitle className="text-3xl">Create your first career intelligence loop.</DialogTitle><DialogDescription>Follow these steps to turn MomentumAI from an empty workspace into a daily job-search assistant.</DialogDescription></DialogHeader><div className="mt-6 grid gap-3 md:grid-cols-5">{steps.map((item, index) => { const Icon = item.icon; return <button key={item.title} onClick={() => { setView(item.view); setProgress(item.progress); onComplete(); }} className="rounded-2xl bg-slate-950/[0.04] p-4 text-left transition hover:-translate-y-1 hover:bg-indigo-500/10 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:bg-white/[0.06]"><div className="flex items-center justify-between"><Icon className="h-6 w-6 text-indigo-500" /><span className="text-xs font-bold text-slate-400">0{index + 1}</span></div><p className="mt-3 font-semibold">{item.title}</p><p className="mt-1 text-sm leading-5 text-slate-500 dark:text-slate-400">{item.text}</p></button>; })}</div><div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100"><strong>Trust reminder:</strong> MomentumAI does not auto-apply, does not invent experience, and keeps generated documents under your review.</div><div className="mt-6 flex flex-wrap justify-end gap-3"><Button variant="secondary" onClick={() => { setView("search"); setProgress(75); onComplete(); }}>Add first job</Button><Button variant="gradient" onClick={() => { setView("profile"); setProgress(25); onComplete(); }}>Start with resume <ArrowRight className="h-4 w-4" /></Button></div></div></DialogContent></Dialog>;
+function ActivationEngine({ open, onComplete, setView, setProgress, initialProfile, refreshDashboard }: { open: boolean; onComplete: () => void; setView: (view: View) => void; setProgress: (progress: number) => void; initialProfile: UserProfile | null; refreshDashboard: (options?: { allowCache?: boolean }) => Promise<void> }) {
+  const [step, setStep] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [parseResult, setParseResult] = useState<ResumeParseResult | null>(null);
+  const [review, setReview] = useState<ActivationProfileReview | null>(null);
+  const [profileDraft, setProfileDraft] = useState<UserProfile | null>(initialProfile);
+  const [titlesDraft, setTitlesDraft] = useState(initialProfile?.preferredTitles.join("\n") ?? "");
+  const [skillsDraft, setSkillsDraft] = useState(initialProfile?.skills.join("\n") ?? "");
+  const [jobImportText, setJobImportText] = useState("");
+  const [jobUrl, setJobUrl] = useState("");
+  const [recruiterEmail, setRecruiterEmail] = useState("");
+  const [jobDraft, setJobDraft] = useState<ImportedJobDraft | null>(null);
+  const [firstJob, setFirstJob] = useState<JobPosting | null>(null);
+  const [firstPacket, setFirstPacket] = useState<GeneratedApplication | null>(null);
+  const [resumeScore, setResumeScore] = useState(0);
+
+  useEffect(() => {
+    if (initialProfile && !profileDraft) {
+      setProfileDraft(initialProfile);
+      setTitlesDraft(initialProfile.preferredTitles.join("\n"));
+      setSkillsDraft(initialProfile.skills.join("\n"));
+    }
+  }, [initialProfile?.email]);
+
+  const progress = step === 1 ? 10 : step === 2 ? 35 : step === 3 ? 55 : step === 4 ? 75 : step === 5 ? 92 : 100;
+
+  const parseResumeFile = async (file: File) => {
+    if (!initialProfile) return;
+    if (file.size > 6_000_000) {
+      toast.error("Resume file is too large. Try a smaller PDF, DOCX, TXT, or MD file.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const contentBase64 = await fileToBase64(file);
+      const result = await request<ResumeParseResult>("/api/resume/parse", { method: "POST", body: JSON.stringify({ filename: file.name, mimeType: file.type || "application/octet-stream", contentBase64 }) });
+      const nextProfile = {
+        ...initialProfile,
+        ...result.profileDraft,
+        name: result.profileDraft.name || initialProfile.name,
+        email: result.profileDraft.email || initialProfile.email,
+        location: initialProfile.location,
+        commuteMiles: initialProfile.commuteMiles,
+        desiredPayMin: initialProfile.desiredPayMin,
+        desiredPayMax: initialProfile.desiredPayMax,
+        preferredTitles: initialProfile.preferredTitles,
+        coverLetterStyle: initialProfile.coverLetterStyle
+      };
+      setParseResult(result);
+      setProfileDraft(nextProfile);
+      setSkillsDraft(joinLines(result.profileDraft.skills?.length ? result.profileDraft.skills : initialProfile.skills));
+      const profileReview = buildActivationProfileReview(result, nextProfile);
+      setReview(profileReview);
+      setResumeScore(profileReview.resumeCompleteness);
+      setStep(2);
+      setProgress(25);
+      toast.success("Resume parsed. Review the extracted profile before approving.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not parse resume. Try TXT or paste manually.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const approveProfile = async () => {
+    if (!profileDraft) return;
+    setBusy(true);
+    try {
+      const approved = { ...profileDraft, preferredTitles: splitLines(titlesDraft), skills: splitLines(skillsDraft) };
+      await request<UserProfile>("/api/profile", { method: "PUT", body: JSON.stringify(approved) });
+      await refreshDashboard();
+      setProfileDraft(approved);
+      setStep(4);
+      setProgress(60);
+      toast.success("Profile approved and saved to your workspace.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not save profile.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const extractJob = async () => {
+    if (!jobImportText.trim() && !jobUrl.trim() && !recruiterEmail.trim()) {
+      toast.error("Paste a job URL, job description, or recruiter email first.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const draft = await request<ImportedJobDraft>("/api/jobs/import", { method: "POST", body: JSON.stringify({ text: jobImportText, url: jobUrl, recruiterEmail, source: jobUrl ? "Activation URL import" : recruiterEmail ? "Activation recruiter email" : "Activation paste" }) });
+      setJobDraft(draft);
+      setStep(5);
+      setProgress(80);
+      toast.success(`Job extracted with ${draft.confidence}% confidence. Generate your first match next.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not extract job details.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const generateFirstMatch = async () => {
+    if (!jobDraft || !activationJobDraftReady(jobDraft)) {
+      toast.error("Review the extracted job fields before generating the first match.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const job = await request<JobPosting>("/api/jobs/manual", { method: "POST", body: JSON.stringify(jobDraft) });
+      const packet = await request<GeneratedApplication>(`/api/jobs/${job.id}/generate`, { method: "POST" });
+      setFirstJob(job);
+      setFirstPacket(packet);
+      await refreshDashboard();
+      setStep(6);
+      setProgress(100);
+      toast.success("First match generated. Your resume was tailored successfully.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not generate first match.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const summary = firstJob ? buildActivationFirstMatchSummary(firstJob, resumeScore || 72, 79) : null;
+
+  return <Dialog open={open} onOpenChange={(next) => !next && onComplete()}><DialogContent className="max-h-[94vh] max-w-6xl overflow-y-auto"><div className="p-5 md:p-8"><DialogHeader><Badge className="w-fit bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">Activation Engine</Badge><DialogTitle className="text-3xl">Upload Resume → Review → Import Job → See Results</DialogTitle><DialogDescription>MomentumAI should prove value in under 60 seconds. Follow the shortest path to your first match.</DialogDescription></DialogHeader><div className="mt-6"><ProgressLabel label={`Step ${step} of 6`} value={progress} /></div><div className="mt-6 grid gap-4 lg:grid-cols-[260px_1fr]"><div className="space-y-2">{["Upload Resume", "Extract Profile", "Review Profile", "Import First Job", "Generate First Match", "Success Moment"].map((label, index) => <button key={label} onClick={() => setStep(index + 1)} className={`w-full rounded-2xl p-3 text-left text-sm font-semibold transition ${step === index + 1 ? "bg-slate-950 text-white dark:bg-white dark:text-slate-950" : "bg-slate-950/[0.04] text-slate-500 hover:bg-indigo-500/10 dark:bg-white/[0.06] dark:text-slate-300"}`}>{index + 1}. {label}</button>)}</div><div>{step === 1 && <ActivationUpload dragging={dragging} setDragging={setDragging} busy={busy} onFile={parseResumeFile} />}{step === 2 && <ActivationExtracted review={review} parseResult={parseResult} onNext={() => setStep(3)} />}{step === 3 && profileDraft && <ActivationReviewProfile profileDraft={profileDraft} setProfileDraft={setProfileDraft} titlesDraft={titlesDraft} setTitlesDraft={setTitlesDraft} skillsDraft={skillsDraft} setSkillsDraft={setSkillsDraft} review={review} onApprove={approveProfile} busy={busy} />}{step === 4 && <ActivationJobImport jobUrl={jobUrl} setJobUrl={setJobUrl} jobImportText={jobImportText} setJobImportText={setJobImportText} recruiterEmail={recruiterEmail} setRecruiterEmail={setRecruiterEmail} onExtract={extractJob} busy={busy} />}{step === 5 && jobDraft && <ActivationFirstJob jobDraft={jobDraft} setJobDraft={setJobDraft} onGenerate={generateFirstMatch} busy={busy} />}{step === 6 && summary && firstJob && firstPacket && <ActivationSuccess summary={summary} firstJob={firstJob} firstPacket={firstPacket} onDashboard={() => { setView("pending"); onComplete(); }} />}</div></div><div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100"><strong>Trust reminder:</strong> MomentumAI does not auto-apply, does not invent experience, and keeps generated documents editable before export.</div></div></DialogContent></Dialog>;
 }
+
+function ActivationUpload({ dragging, setDragging, busy, onFile }: { dragging: boolean; setDragging: (dragging: boolean) => void; busy: boolean; onFile: (file: File) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return <Card><CardContent className="p-6"><div onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) onFile(file); }} className={`grid min-h-[320px] place-items-center rounded-[1.5rem] border border-dashed p-8 text-center transition ${dragging ? "border-indigo-400 bg-indigo-500/10" : "border-slate-300 bg-slate-950/[0.03] dark:border-white/15 dark:bg-white/[0.04]"}`}><UploadCloud className="h-12 w-12 text-indigo-500" /><div><h3 className="mt-4 text-2xl font-semibold">Upload your resume</h3><p className="mt-2 text-slate-500 dark:text-slate-400">PDF, DOCX, TXT, or MD. MomentumAI extracts your profile automatically.</p><Button className="mt-5" variant="gradient" onClick={() => inputRef.current?.click()} disabled={busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />} Choose resume</Button><input ref={inputRef} type="file" accept=".pdf,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) onFile(file); }} /></div></div></CardContent></Card>;
+}
+
+function ActivationExtracted({ review, parseResult, onNext }: { review: ActivationProfileReview | null; parseResult: ResumeParseResult | null; onNext: () => void }) {
+  return <Card><CardHeader><CardTitle>Extracted profile</CardTitle><CardDescription>MomentumAI found these fields. Uncertain fields are highlighted for review.</CardDescription></CardHeader><CardContent>{review ? <div className="grid gap-4"><div className="grid gap-3 md:grid-cols-3"><MetricTile value={review.overallConfidence} label="Extraction confidence" /><MetricTile value={review.resumeCompleteness} label="Resume completeness" /><MetricTile value={review.profileCompleteness} label="Profile completeness" /></div><div className="grid gap-2 md:grid-cols-2">{review.fields.map((field) => <div key={field.field} className={`rounded-2xl p-3 ${field.uncertain ? "border border-amber-200 bg-amber-50 dark:border-amber-400/20 dark:bg-amber-400/10" : "bg-slate-950/[0.04] dark:bg-white/[0.06]"}`}><div className="flex items-center justify-between gap-2"><p className="font-semibold">{field.field}</p><Badge>{field.confidence}%</Badge></div><p className="mt-1 truncate text-sm text-slate-500 dark:text-slate-400">{field.value || "Needs input"}</p><p className="mt-1 text-xs text-slate-400">{field.reason}</p></div>)}</div>{review.missingAchievements.length > 0 && <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100"><p className="font-semibold">Missing measurable achievements</p><ul className="mt-2 list-disc pl-5">{review.missingAchievements.map((item) => <li key={item}>{item}</li>)}</ul></div>}<Button variant="gradient" onClick={onNext}>Review and correct profile <ArrowRight className="h-4 w-4" /></Button></div> : <EmptyState icon={FileText} title="No resume parsed yet" description="Upload a resume first to extract your profile." />}</CardContent></Card>;
+}
+
+function ActivationReviewProfile({ profileDraft, setProfileDraft, titlesDraft, setTitlesDraft, skillsDraft, setSkillsDraft, review, onApprove, busy }: { profileDraft: UserProfile; setProfileDraft: (profile: UserProfile) => void; titlesDraft: string; setTitlesDraft: (value: string) => void; skillsDraft: string; setSkillsDraft: (value: string) => void; review: ActivationProfileReview | null; onApprove: () => void; busy: boolean }) {
+  return <Card><CardHeader><CardTitle>Review profile before saving</CardTitle><CardDescription>Make quick corrections. One click saves the approved profile to your account.</CardDescription></CardHeader><CardContent className="grid gap-4"><div className="grid gap-4 md:grid-cols-2"><Label>Name<Input value={profileDraft.name} onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} /></Label><Label>Email<Input value={profileDraft.email} onChange={(event) => setProfileDraft({ ...profileDraft, email: event.target.value })} /></Label><Label>Location<Input value={profileDraft.location} onChange={(event) => setProfileDraft({ ...profileDraft, location: event.target.value })} /></Label><Label>Target pay min<Input type="number" value={profileDraft.desiredPayMin} onChange={(event) => setProfileDraft({ ...profileDraft, desiredPayMin: Number(event.target.value) })} /></Label></div><Label>Target job titles<Textarea rows={4} value={titlesDraft} onChange={(event) => setTitlesDraft(event.target.value)} /></Label><Label>Skills and tools<Textarea rows={5} value={skillsDraft} onChange={(event) => setSkillsDraft(event.target.value)} /></Label><Label>Experience summary<Textarea rows={6} value={profileDraft.experience} onChange={(event) => setProfileDraft({ ...profileDraft, experience: event.target.value })} /></Label>{review && <div className="rounded-2xl bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><ProgressLabel label="Profile completeness" value={review.profileCompleteness} /></div>}<Button variant="gradient" onClick={onApprove} disabled={busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Approve profile</Button></CardContent></Card>;
+}
+
+function ActivationJobImport({ jobUrl, setJobUrl, jobImportText, setJobImportText, recruiterEmail, setRecruiterEmail, onExtract, busy }: { jobUrl: string; setJobUrl: (value: string) => void; jobImportText: string; setJobImportText: (value: string) => void; recruiterEmail: string; setRecruiterEmail: (value: string) => void; onExtract: () => void; busy: boolean }) {
+  return <Card><CardHeader><CardTitle>Import your first job</CardTitle><CardDescription>Paste a job URL, job description, or recruiter email. MomentumAI extracts structured job data.</CardDescription></CardHeader><CardContent className="grid gap-4"><Label>Job URL<Input value={jobUrl} onChange={(event) => setJobUrl(event.target.value)} placeholder="https://careers.ford.com/..." /></Label><Label>Job description<Textarea rows={7} value={jobImportText} onChange={(event) => setJobImportText(event.target.value)} placeholder="Paste job posting content..." /></Label><Label>Recruiter email<Textarea rows={4} value={recruiterEmail} onChange={(event) => setRecruiterEmail(event.target.value)} placeholder="Optional recruiter message..." /></Label><Button variant="gradient" onClick={onExtract} disabled={busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} Extract job</Button></CardContent></Card>;
+}
+
+function ActivationFirstJob({ jobDraft, setJobDraft, onGenerate, busy }: { jobDraft: ImportedJobDraft; setJobDraft: (job: ImportedJobDraft) => void; onGenerate: () => void; busy: boolean }) {
+  return <Card><CardHeader><CardTitle>Generate first match</CardTitle><CardDescription>Review extracted job fields, then score the match and tailor the resume.</CardDescription></CardHeader><CardContent className="grid gap-4"><div className="grid gap-4 md:grid-cols-2"><Label>Title<Input value={jobDraft.title} onChange={(event) => setJobDraft({ ...jobDraft, title: event.target.value })} /></Label><Label>Company<Input value={jobDraft.company} onChange={(event) => setJobDraft({ ...jobDraft, company: event.target.value })} /></Label><Label>Location<Input value={jobDraft.location} onChange={(event) => setJobDraft({ ...jobDraft, location: event.target.value })} /></Label><Label>Pay<Input value={jobDraft.pay ?? ""} onChange={(event) => setJobDraft({ ...jobDraft, pay: event.target.value })} /></Label></div><Label>Description<Textarea rows={8} value={jobDraft.description} onChange={(event) => setJobDraft({ ...jobDraft, description: event.target.value })} /></Label><div className="flex flex-wrap gap-2"><Badge>{jobDraft.confidence}% extraction confidence</Badge>{jobDraft.requiredSkills.slice(0, 8).map((skill) => <Badge key={skill}>{skill}</Badge>)}</div><Button variant="gradient" onClick={onGenerate} disabled={busy || !activationJobDraftReady(jobDraft)}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Generate first match</Button></CardContent></Card>;
+}
+
+function ActivationSuccess({ summary, firstJob, firstPacket, onDashboard }: { summary: ReturnType<typeof buildActivationFirstMatchSummary>; firstJob: JobPosting; firstPacket: GeneratedApplication; onDashboard: () => void }) {
+  return <Card><CardHeader><CardTitle>First success moment</CardTitle><CardDescription>Your profile, first job, Momentum Score, and tailored resume preview are ready.</CardDescription></CardHeader><CardContent className="grid gap-4 lg:grid-cols-[1fr_360px]"><div className="rounded-[1.5rem] bg-slate-950 p-6 text-white"><Badge className="border-white/20 bg-white/10 text-white">{firstJob.fitLabel}</Badge><h3 className="mt-4 text-4xl font-semibold tracking-[-0.06em]">{summary.headline}</h3><div className="mt-5 grid gap-3 md:grid-cols-3"><PreviewMetric label="Projected after gaps" value={`${summary.projectedScore}`} /><PreviewMetric label="Resume score" value={`${summary.resumeScore}`} /><PreviewMetric label="Momentum Score" value={`${summary.momentumScore}`} /></div><ul className="mt-5 space-y-2 text-sm text-white/75">{summary.successMessages.map((item) => <li key={item}>✓ {item}</li>)}</ul></div><div className="rounded-[1.5rem] bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><p className="font-semibold">Tailored resume preview</p><pre className="mt-3 max-h-[320px] overflow-y-auto whitespace-pre-wrap text-xs leading-5 text-slate-600 dark:text-slate-300">{firstPacket.resume}</pre></div><div className="lg:col-span-2 flex flex-wrap justify-end gap-3"><Button variant="secondary" onClick={() => navigator.clipboard.writeText(firstPacket.resume).then(() => toast.success("Resume copied."))}>Copy resume</Button><Button variant="gradient" onClick={onDashboard}>Go to dashboard <ArrowRight className="h-4 w-4" /></Button></div></CardContent></Card>;
+}
+
 function MatchRing({ score, inverse = false }: { score: number; inverse?: boolean }) {
   const circumference = 2 * Math.PI * 26;
   const offset = circumference - (score / 100) * circumference;
