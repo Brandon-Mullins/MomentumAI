@@ -39,7 +39,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input, Label, Select, Textarea } from "./components/ui/form";
 import { Skeleton } from "./components/ui/skeleton";
-import type { AnalyticsData, ApplicationStatus, CareerCoachReport, DashboardData, GeneratedApplication, ImportedJobDraft, InterviewSimulator, JobDecisionScorecard, JobPosting, MissingSkillsMarketplace, ResumeParseResult, UserProfile } from "../shared/types";
+import type { AnalyticsData, ApplicationStatus, AuthResponse, AuthUser, CareerCoachReport, DashboardData, GeneratedApplication, ImportedJobDraft, InterviewSimulator, JobDecisionScorecard, JobPosting, MissingSkillsMarketplace, MomentumScore, ResumeParseResult, UserProfile, UserSettings } from "../shared/types";
 
 type View = "pending" | "saved" | "profile" | "search" | "tracker" | "coach";
 type Theme = "light" | "dark";
@@ -86,10 +86,16 @@ function fileToBase64(file: File) {
   });
 }
 
+function authToken() {
+  return localStorage.getItem("momentumai-token") || "";
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = authToken();
   const response = await fetch(path, {
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options?.headers
     },
     ...options
@@ -106,6 +112,9 @@ function App() {
   const prefersReducedMotion = useReducedMotion();
   const [view, setView] = useState<View>("pending");
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [needsAuth, setNeedsAuth] = useState(() => !localStorage.getItem("momentumai-token"));
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileDraft, setProfileDraft] = useState<UserProfile | null>(null);
   const [titlesDraft, setTitlesDraft] = useState("");
   const [skillsDraft, setSkillsDraft] = useState("");
@@ -129,16 +138,22 @@ function App() {
   const loadDashboard = async () => {
     const data = await request<DashboardData>("/api/dashboard");
     setDashboard(data);
+    setAuthUser(data.user ?? null);
+    setNeedsAuth(false);
     setProfileDraft(data.profile);
     setTitlesDraft(joinLines(data.profile.preferredTitles));
     setSkillsDraft(joinLines(data.profile.skills));
   };
 
   useEffect(() => {
+    if (needsAuth) {
+      setIsLoading(false);
+      return;
+    }
     loadDashboard()
       .catch(() => toast.error("Could not reach the API. Make sure the Express server is running."))
       .finally(() => setIsLoading(false));
-  }, []);
+  }, [needsAuth]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -185,6 +200,32 @@ function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  const handleAuthSuccess = (response: AuthResponse) => {
+    localStorage.setItem("momentumai-token", response.token);
+    setAuthUser(response.user);
+    setNeedsAuth(false);
+    setIsLoading(true);
+    loadDashboard().finally(() => setIsLoading(false));
+  };
+
+  const continueDemo = () => handleAuthSuccess({ token: "demo-token", user: { id: "demo", name: "Demo Candidate", email: "demo@momentumai.local", createdAt: new Date().toISOString(), settings: { dailyAgentEnabled: true, targetJobSources: ["Greenhouse", "Lever", "Workday"], emailDigest: true, subscriptionTier: "Free", analysesUsedThisMonth: 0, analysisLimit: 25 } } });
+
+  const logout = async () => {
+    await request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    localStorage.removeItem("momentumai-token");
+    setDashboard(null);
+    setAuthUser(null);
+    setNeedsAuth(true);
+  };
+
+  const saveSettings = async (settings: Partial<UserSettings>) => {
+    await runAction("Settings saved.", async () => {
+      const user = await request<AuthUser>("/api/settings", { method: "PATCH", body: JSON.stringify(settings) });
+      setAuthUser(user);
+      await loadDashboard();
+    });
+  };
 
   const jobs = dashboard?.jobs ?? [];
   const filteredJobs = useMemo(() => {
@@ -327,6 +368,10 @@ function App() {
     });
   };
 
+  if (needsAuth) {
+    return <AuthGate theme={theme} setTheme={setTheme} onAuthSuccess={handleAuthSuccess} onDemo={continueDemo} />;
+  }
+
   return (
     <div className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.25),_transparent_34rem),linear-gradient(135deg,#f8fafc,#eef2ff_45%,#f8fafc)] text-slate-950 transition-colors dark:bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.28),_transparent_34rem),linear-gradient(135deg,#020617,#0f172a_45%,#111827)] dark:text-white">
       <Toaster richColors position="top-right" theme={theme} />
@@ -337,7 +382,7 @@ function App() {
       <div className="relative mx-auto flex min-h-screen max-w-[1500px] flex-col gap-4 p-3 sm:p-4 lg:flex-row lg:p-5">
         <Sidebar view={view} setView={setView} profile={dashboard?.profile} jobs={jobs} profileCompletion={profileCompletion} />
         <main id="main-content" className="flex min-w-0 flex-1 flex-col gap-4">
-          <TopBar query={query} setQuery={setQuery} theme={theme} setTheme={setTheme} onAddJob={() => setView("search")} onCommand={() => setCommandOpen(true)} profile={dashboard?.profile} />
+          <TopBar query={query} setQuery={setQuery} theme={theme} setTheme={setTheme} onAddJob={() => setView("search")} onCommand={() => setCommandOpen(true)} onSettings={() => setSettingsOpen(true)} onLogout={logout} profile={dashboard?.profile} user={authUser} />
 
           {isLoading ? (
             <DashboardSkeleton />
@@ -354,6 +399,7 @@ function App() {
                 className="grid gap-4"
               >
                 <HeroPanel profile={dashboard.profile} pendingCount={pendingJobs.length} avgMatch={avgMatch} profileCompletion={profileCompletion} />
+                {dashboard.momentumScore && <MomentumScorePanel score={dashboard.momentumScore} />}
                 <AnalyticsGrid analytics={analytics} />
                 {dashboard.analytics && <IntelligenceAnalyticsPanel analytics={dashboard.analytics} jobs={jobs} />}
 
@@ -371,9 +417,70 @@ function App() {
 
       <CommandPalette open={commandOpen} setOpen={setCommandOpen} commandQuery={commandQuery} setCommandQuery={setCommandQuery} setView={setView} setTheme={setTheme} theme={theme} jobs={jobs} generateForJob={generateForJob} />
       <ApplicationDialog generated={generated} activeJob={activeJob} setGenerated={setGenerated} onApplied={(job) => updateStatus(job, "Applied")} />
+      <SettingsDialog open={settingsOpen} setOpen={setSettingsOpen} user={authUser} onSave={saveSettings} isBusy={isBusy} />
       <OnboardingDialog open={showOnboarding} onComplete={completeOnboarding} setView={setView} />
     </div>
   );
+}
+
+function AuthGate({ theme, setTheme, onAuthSuccess, onDemo }: { theme: Theme; setTheme: (theme: Theme) => void; onAuthSuccess: (response: AuthResponse) => void; onDemo: () => void }) {
+  const [mode, setMode] = useState<"login" | "register" | "reset">("register");
+  const [name, setName] = useState("Test Engineer");
+  const [email, setEmail] = useState("demo@momentumai.local");
+  const [password, setPassword] = useState("demo1234");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      if (mode === "reset") {
+        const result = await request<{ message: string; resetToken: string }>("/api/auth/reset-password", { method: "POST", body: JSON.stringify({ email }) });
+        toast.success(`${result.message} Token: ${result.resetToken}`);
+        setMode("login");
+        return;
+      }
+      const response = await request<AuthResponse>(mode === "login" ? "/api/auth/login" : "/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify(mode === "login" ? { email, password } : { name, email, password })
+      });
+      toast.success(mode === "login" ? "Welcome back." : "Account created. Your dashboard is ready.");
+      onAuthSuccess(response);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Authentication failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <div className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(99,102,241,0.28),_transparent_34rem),linear-gradient(135deg,#020617,#0f172a_45%,#111827)] p-4 text-white"><Toaster richColors position="top-right" theme={theme} /><AmbientBackground reducedMotion={false} /><div className="relative mx-auto grid min-h-[calc(100vh-2rem)] max-w-6xl place-items-center"><Card className="w-full max-w-5xl overflow-hidden border-white/10 bg-white/[0.06]"><CardContent className="grid gap-0 p-0 lg:grid-cols-[1fr_420px]"><div className="relative overflow-hidden bg-slate-950 p-8 text-white lg:p-12"><div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(99,102,241,0.55),transparent_24rem),radial-gradient(circle_at_85%_0%,rgba(236,72,153,0.35),transparent_22rem)]" /><div className="relative"><Badge className="border-white/20 bg-white/10 text-white">Production SaaS foundation</Badge><h1 className="mt-6 text-4xl font-semibold tracking-[-0.07em] md:text-6xl">MomentumAI is now account-based.</h1><p className="mt-5 max-w-xl text-lg leading-8 text-white/70">Create a workspace, save real jobs, preserve your profile, and build your proprietary Momentum Score over time.</p><div className="mt-8 grid gap-3 sm:grid-cols-2"><AuthFeature title="Multi-user dashboards" text="Each account gets scoped profile, jobs, notes, packets, and analytics." /><AuthFeature title="Supabase-ready RLS" text="Schema includes user ownership and row-level policies for production." /><AuthFeature title="Momentum Score™" text="Resume strength, market competitiveness, job match, and interview readiness." /><AuthFeature title="Subscription-ready" text="Settings include tiers and monthly analysis limits for monetization." /></div></div></div><div className="bg-white/95 p-6 text-slate-950 dark:bg-slate-950/95 dark:text-white lg:p-8"><div className="mb-6 flex items-center justify-between"><div><p className="text-sm font-semibold text-indigo-500">Account access</p><h2 className="text-2xl font-semibold tracking-[-0.04em]">{mode === "login" ? "Sign in" : mode === "reset" ? "Reset password" : "Create account"}</h2></div><Button variant="secondary" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</Button></div><div className="grid gap-4">{mode === "register" && <Label>Name<Input value={name} onChange={(event) => setName(event.target.value)} /></Label>}<Label>Email<Input value={email} onChange={(event) => setEmail(event.target.value)} /></Label>{mode !== "reset" && <Label>Password<Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></Label>}<Button variant="gradient" size="lg" onClick={submit} disabled={busy}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{mode === "login" ? "Sign in" : mode === "reset" ? "Send reset" : "Create workspace"}</Button><Button variant="secondary" onClick={onDemo}>Continue with demo workspace</Button></div><div className="mt-5 flex flex-wrap gap-3 text-sm"><button className="font-semibold text-indigo-500" onClick={() => setMode(mode === "login" ? "register" : "login")}>{mode === "login" ? "Create an account" : "Already have an account?"}</button><button className="font-semibold text-slate-500" onClick={() => setMode("reset")}>Password reset</button></div><p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">Demo credentials: demo@momentumai.local / demo1234. In production this maps to Supabase Auth email workflows.</p></div></CardContent></Card></div></div>;
+}
+
+function AuthFeature({ title, text }: { title: string; text: string }) {
+  return <div className="rounded-2xl border border-white/10 bg-white/10 p-4 backdrop-blur"><p className="font-semibold">{title}</p><p className="mt-1 text-sm leading-6 text-white/65">{text}</p></div>;
+}
+
+function MomentumScorePanel({ score }: { score: MomentumScore }) {
+  const metrics = [
+    { label: "Resume Strength", value: score.resumeStrength },
+    { label: "Market Competitiveness", value: score.marketCompetitiveness },
+    { label: "Job Match", value: score.jobMatch },
+    { label: "Interview Readiness", value: score.interviewReadiness }
+  ];
+  return <Card className="overflow-hidden"><CardContent className="grid gap-5 p-5 lg:grid-cols-[260px_1fr]"><div className="rounded-[1.5rem] bg-slate-950 p-5 text-white dark:bg-white/[0.06]"><p className="text-sm text-white/60">Momentum Score™</p><div className="mt-4 flex items-center justify-between"><div><p className="text-6xl font-semibold tracking-[-0.08em]">{score.overall}</p><p className="text-sm text-white/60">combined SaaS health score</p></div><MatchRing score={score.overall} inverse /></div></div><div className="grid gap-4 md:grid-cols-2"><div className="grid gap-3">{metrics.map((metric) => <MiniBar key={metric.label} label={metric.label} value={metric.value} max={100} suffix="%" />)}</div><div className="rounded-[1.25rem] bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><p className="font-semibold">Next best actions</p><ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{score.nextActions.map((action) => <li key={action} className="flex gap-2"><Target className="mt-1 h-4 w-4 shrink-0 text-indigo-500" />{action}</li>)}</ul></div></div></CardContent></Card>;
+}
+
+function SettingsDialog({ open, setOpen, user, onSave, isBusy }: { open: boolean; setOpen: (open: boolean) => void; user: AuthUser | null; onSave: (settings: Partial<UserSettings>) => void; isBusy: boolean }) {
+  const [dailyAgentEnabled, setDailyAgentEnabled] = useState(user?.settings.dailyAgentEnabled ?? true);
+  const [emailDigest, setEmailDigest] = useState(user?.settings.emailDigest ?? true);
+  const [targetJobSources, setTargetJobSources] = useState((user?.settings.targetJobSources ?? []).join("\n"));
+
+  useEffect(() => {
+    setDailyAgentEnabled(user?.settings.dailyAgentEnabled ?? true);
+    setEmailDigest(user?.settings.emailDigest ?? true);
+    setTargetJobSources((user?.settings.targetJobSources ?? []).join("\n"));
+  }, [user?.id, open]);
+
+  return <Dialog open={open} onOpenChange={setOpen}><DialogContent className="max-w-2xl"><div className="p-6 md:p-8"><DialogHeader><Badge className="w-fit bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">User settings</Badge><DialogTitle>Workspace and subscription settings</DialogTitle><DialogDescription>Production-ready account settings for the daily job agent, source preferences, and monetization limits.</DialogDescription></DialogHeader><div className="mt-6 grid gap-4"><div className="rounded-2xl bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><p className="font-semibold">{user?.name}</p><p className="text-sm text-slate-500 dark:text-slate-400">{user?.email}</p><div className="mt-3 flex flex-wrap gap-2"><Badge>{user?.settings.subscriptionTier ?? "Free"}</Badge><Badge>{user?.settings.analysesUsedThisMonth ?? 0}/{user?.settings.analysisLimit ?? 25} analyses</Badge></div></div><label className="flex items-center justify-between rounded-2xl bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><span><strong>Daily AI Job Agent</strong><span className="block text-sm text-slate-500 dark:text-slate-400">Find and score new jobs every morning.</span></span><input type="checkbox" checked={dailyAgentEnabled} onChange={(event) => setDailyAgentEnabled(event.target.checked)} /></label><label className="flex items-center justify-between rounded-2xl bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><span><strong>Email digest</strong><span className="block text-sm text-slate-500 dark:text-slate-400">Send summaries for strong matches and premium insights.</span></span><input type="checkbox" checked={emailDigest} onChange={(event) => setEmailDigest(event.target.checked)} /></label><Label>Target job sources<Textarea rows={5} value={targetJobSources} onChange={(event) => setTargetJobSources(event.target.value)} /></Label><div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100"><strong>Billing architecture:</strong> Free accounts are capped at 25 analyses/month. Pro, Premium, and Recruiter tiers are represented in the data model and ready for Stripe or RevenueCat wiring.</div><Button variant="gradient" onClick={() => onSave({ dailyAgentEnabled, emailDigest, targetJobSources: splitLines(targetJobSources) })} disabled={isBusy}>{isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Save settings</Button></div></div></DialogContent></Dialog>;
 }
 
 function AmbientBackground({ reducedMotion }: { reducedMotion: boolean }) {
@@ -432,7 +539,7 @@ function Sidebar({ view, setView, profile, jobs, profileCompletion }: { view: Vi
   );
 }
 
-function TopBar({ query, setQuery, theme, setTheme, onAddJob, onCommand, profile }: { query: string; setQuery: (query: string) => void; theme: Theme; setTheme: (theme: Theme) => void; onAddJob: () => void; onCommand: () => void; profile?: UserProfile }) {
+function TopBar({ query, setQuery, theme, setTheme, onAddJob, onCommand, onSettings, onLogout, profile, user }: { query: string; setQuery: (query: string) => void; theme: Theme; setTheme: (theme: Theme) => void; onAddJob: () => void; onCommand: () => void; onSettings: () => void; onLogout: () => void; profile?: UserProfile; user?: AuthUser | null }) {
   return (
     <motion.header initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }} className="sticky top-3 z-10 flex flex-col gap-3 rounded-[2rem] border border-white/70 bg-white/75 p-3 shadow-xl shadow-slate-950/[0.06] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-950/60 md:flex-row md:items-center">
       <div className="relative flex-1">
@@ -440,7 +547,7 @@ function TopBar({ query, setQuery, theme, setTheme, onAddJob, onCommand, profile
         <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search jobs, skills, companies, locations..." className="h-12 rounded-full border-transparent bg-slate-950/[0.04] pl-11 pr-20 shadow-none dark:bg-white/[0.08]" />
         <button type="button" onClick={onCommand} className="absolute right-4 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-400 transition hover:border-indigo-300 hover:text-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:border-white/10 dark:bg-slate-900 md:flex" aria-label="Open command palette"><Command className="h-3 w-3" /> K</button>
       </div>
-      <div className="flex items-center gap-2"><Button variant="secondary" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label="Toggle theme">{theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</Button><Button variant="secondary" size="icon" onClick={onCommand} aria-label="Open command palette"><Command className="h-4 w-4" /></Button><Button variant="secondary" size="icon" aria-label="Notifications"><Bell className="h-4 w-4" /></Button><Button variant="gradient" onClick={onAddJob}><Plus className="h-4 w-4" /> Add job</Button><div className="hidden items-center gap-2 rounded-full border border-white/70 bg-white/70 py-1 pl-1 pr-3 dark:border-white/10 dark:bg-white/10 sm:flex"><Avatar name={profile?.name ?? "Candidate"} small /><span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{profile?.name?.split(" ")[0] ?? "You"}</span></div></div>
+      <div className="flex items-center gap-2"><Button variant="secondary" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label="Toggle theme">{theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</Button><Button variant="secondary" size="icon" onClick={onCommand} aria-label="Open command palette"><Command className="h-4 w-4" /></Button><Button variant="secondary" size="icon" onClick={onSettings} aria-label="User settings"><UserRound className="h-4 w-4" /></Button><Button variant="secondary" size="icon" onClick={onLogout} aria-label="Log out"><XCircle className="h-4 w-4" /></Button><Button variant="gradient" onClick={onAddJob}><Plus className="h-4 w-4" /> Add job</Button><button onClick={onSettings} className="hidden items-center gap-2 rounded-full border border-white/70 bg-white/70 py-1 pl-1 pr-3 transition hover:bg-white dark:border-white/10 dark:bg-white/10 dark:hover:bg-white/15 sm:flex"><Avatar name={profile?.name ?? user?.name ?? "Candidate"} small /><span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{user?.name?.split(" ")[0] ?? profile?.name?.split(" ")[0] ?? "You"}</span></button></div>
     </motion.header>
   );
 }

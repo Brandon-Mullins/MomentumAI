@@ -15,6 +15,39 @@ export type CoverLetterTone =
 export type FitLabel = "Strong fit" | "Possible fit" | "Stretch role";
 export type Recommendation = "Apply now" | "Save for later" | "Skip" | "Needs more research";
 export type JobSourceProvider = "Greenhouse" | "Lever" | "Workday" | "Company careers page" | "Generic job URL" | "Recruiter email" | "Manual paste";
+export type SubscriptionTier = "Free" | "Pro" | "Premium" | "Recruiter";
+
+
+export interface UserSettings {
+  dailyAgentEnabled: boolean;
+  targetJobSources: string[];
+  emailDigest: boolean;
+  subscriptionTier: SubscriptionTier;
+  analysesUsedThisMonth: number;
+  analysisLimit: number;
+}
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  email: string;
+  createdAt: string;
+  settings: UserSettings;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: AuthUser;
+}
+
+export interface MomentumScore {
+  overall: number;
+  resumeStrength: number;
+  marketCompetitiveness: number;
+  jobMatch: number;
+  interviewReadiness: number;
+  nextActions: string[];
+}
 
 export interface ParsedResume {
   name: string;
@@ -210,6 +243,9 @@ export interface InterviewSimulator {
 }
 
 export interface DashboardData {
+  user?: AuthUser;
+  settings?: UserSettings;
+  momentumScore?: MomentumScore;
   profile: UserProfile;
   jobs: JobPosting[];
   applications: JobPosting[];

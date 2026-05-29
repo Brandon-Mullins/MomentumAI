@@ -83,3 +83,20 @@ This branch now includes foundations for the next paid-SaaS layers:
 - Chrome extension starter in `extension/chrome` with popup, content script, and context menu to capture job pages and open MomentumAI's importer
 
 The extension currently targets the local MVP URL (`http://localhost:5173`). For production, update the extension app URL to the hosted MomentumAI domain and package it through the Chrome Web Store workflow.
+
+## SaaS foundation
+
+MomentumAI now includes the foundation for production SaaS usage:
+
+- Account registration, login, logout, and demo password reset endpoint
+- Demo-memory multi-user workspaces for local development
+- User-scoped profiles, jobs, notes, scorecards, packets, analytics, settings, and Momentum Score™
+- Subscription-ready settings model with Free/Pro/Premium/Recruiter tiers and monthly analysis limits
+- Supabase Auth/RLS schema for production row ownership across profiles, jobs, resume intelligence, intelligence events, settings, and subscriptions
+
+Local demo credentials:
+
+- Email: `demo@momentumai.local`
+- Password: `demo1234`
+
+The in-memory auth fallback is for local development. Production should use Supabase Auth, hosted secrets, email delivery, and server-side subscription webhooks.
