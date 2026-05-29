@@ -1,6 +1,6 @@
 # MomentumAI Job Copilot
 
-MomentumAI is an AI-powered job copilot built for test engineers, engineering technicians, validation specialists, and automotive quality professionals. The platform helps users discover better-matching jobs, analyze role fit, generate tailored resumes and cover letters, track applications, and streamline the job search process without relying solely on LinkedIn. Built with React, TypeScript, Node.js, Express, and Supabase.
+MomentumAI is an AI-powered job copilot and career intelligence platform for test engineers, engineering technicians, validation specialists, quality professionals, and automotive testing candidates. It helps users import real jobs, analyze role fit, tailor truthful application packets, prepare interviews, close missing skill gaps, and improve their proprietary Momentum Score™ without relying solely on LinkedIn. Built with React, TypeScript, Node.js, Express, and Supabase.
 
 The first version supports manual job intake: paste a job description from a company site, job board, recruiter email, or saved posting. The app scores the match against the user's profile, puts roles into a pending review queue, and generates resume and cover letter drafts only after the user chooses to review a job.
 
@@ -116,3 +116,15 @@ npm run build
 ```
 
 Known limitations are documented in `docs/ARCHITECTURE.md`.
+
+## Public marketing and conversion
+
+The app now includes a public-facing SaaS landing experience before authentication:
+
+- Hero with Start free and View demo CTAs
+- Product preview and feature sections
+- Pricing page for Free, Pro, Premium, and Recruiter tiers
+- Trust page covering review-before-apply, no fake experience, user control, and data ownership
+- FAQ and social proof placeholders
+- Post-registration onboarding flow for resume import, target roles, salary/location preferences, first job import, and first Momentum Score™
+- SEO/OpenGraph metadata for a production marketing launch
