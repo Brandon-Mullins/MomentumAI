@@ -72,12 +72,35 @@ npm run preview
 4. **Allow through Windows Defender** if Electron was blocked.
 5. **Node version** — run `node -v` (need 18+).
 
-### Still stuck?
+### `Error: Electron uninstall`
 
-Run this and paste the full output:
+Electron's app binary did not download during `npm install`. Fix it with:
 
 ```cmd
 cd C:\Users\bmull\MomentumAI\rs3-companion
+git pull
+node node_modules\electron\install.js
+npm run dev
+```
+
+You should see a large download (~100MB). After that, check these files exist:
+
+```cmd
+dir node_modules\electron\path.txt
+dir node_modules\electron\dist\electron.exe
+```
+
+If install fails:
+
+1. Check antivirus / Windows Defender did not block the download
+2. Make sure this env var is **not** set: `ELECTRON_SKIP_BINARY_DOWNLOAD`
+3. Clean reinstall:
+
+```cmd
+cd C:\Users\bmull\MomentumAI\rs3-companion
+rmdir /s /q node_modules
+npm install
+node node_modules\electron\install.js
 npm run dev
 ```
 
