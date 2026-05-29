@@ -5,9 +5,13 @@ import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import {
   buildAnalytics,
+  buildCareerCoachReport,
   buildDecisionScorecard,
+  buildInterviewSimulator,
+  buildMissingSkillsMarketplace,
   extractJobData,
   generateApplication,
+  htmlToJobText,
   parseResumeText,
   scoreJob
 } from "../shared/matching";
@@ -252,7 +256,7 @@ app.post("/api/resume/parse", async (req, res) => {
   }
 });
 
-app.post("/api/jobs/import", (req, res) => {
+app.post("/api/jobs/import", async (req, res) => {
   const parsed = importSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() });
@@ -263,7 +267,36 @@ app.post("/api/jobs/import", (req, res) => {
     return res.status(400).json({ error: "Paste a job description, URL, or recruiter email first" });
   }
 
-  res.json(extractJobData(parsed.data));
+  let importPayload = parsed.data;
+  const extractionNotes: string[] = [];
+
+  if (parsed.data.url && !parsed.data.text?.trim()) {
+    try {
+      const response = await fetch(parsed.data.url, {
+        headers: {
+          "User-Agent": "MomentumAIJobCopilot/0.1 (+https://momentumai.local)",
+          Accept: "text/html,application/json;q=0.9,*/*;q=0.8"
+        },
+        signal: AbortSignal.timeout(8000)
+      });
+
+      if (!response.ok) {
+        extractionNotes.push(`URL returned HTTP ${response.status}. Paste the posting content if extraction looks incomplete.`);
+      } else {
+        const contentType = response.headers.get("content-type") ?? "";
+        const body = await response.text();
+        const extractedText = contentType.includes("json") ? JSON.stringify(JSON.parse(body), null, 2) : htmlToJobText(body);
+        importPayload = { ...parsed.data, text: extractedText.slice(0, 25000) };
+        extractionNotes.push("Fetched the URL server-side and extracted readable posting text.");
+      }
+    } catch (error) {
+      extractionNotes.push("Could not fetch this URL locally. Paste the job page content for the clean fallback flow.");
+    }
+  }
+
+  const draft = extractJobData(importPayload);
+  draft.extractionNotes = [...extractionNotes, ...draft.extractionNotes];
+  res.json(draft);
 });
 
 app.post("/api/jobs/manual", async (req, res) => {
@@ -361,6 +394,23 @@ app.post("/api/jobs/:id/packet", (req, res) => {
   }
 
   res.json(generateApplication(profile, job).packet);
+});
+
+
+app.get("/api/career/coach", (_req, res) => {
+  res.json(buildCareerCoachReport(profile, jobs));
+});
+
+app.post("/api/jobs/:id/interview", (req, res) => {
+  const job = findJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json(buildInterviewSimulator(profile, job));
+});
+
+app.get("/api/jobs/:id/skills-marketplace", (req, res) => {
+  const job = findJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json(buildMissingSkillsMarketplace(profile, job));
 });
 
 app.listen(port, () => {

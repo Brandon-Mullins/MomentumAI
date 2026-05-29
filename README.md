@@ -71,3 +71,15 @@ The MVP intentionally starts with manually pasted job descriptions. Later versio
 - Resume export to PDF/DOCX
 - Real authentication and per-user row-level security
 - More advanced AI matching and fraud/scam detection
+
+## Phase 5+ product expansion
+
+This branch now includes foundations for the next paid-SaaS layers:
+
+- Smart URL import with server-side fetch attempts and provider detection for Greenhouse, Lever, Workday, generic company career pages, recruiter emails, and manual paste fallback
+- AI Career Coach endpoint and dashboard section for interview diagnosis, career gaps, salary guidance, resume improvements, and interview prep focus
+- Missing Skills Marketplace for saved jobs with projected score lift and curated learning resources
+- AI Interview Simulator for saved jobs with technical, behavioral, role-specific questions, and STAR answer guidance
+- Chrome extension starter in `extension/chrome` with popup, content script, and context menu to capture job pages and open MomentumAI's importer
+
+The extension currently targets the local MVP URL (`http://localhost:5173`). For production, update the extension app URL to the hosted MomentumAI domain and package it through the Chrome Web Store workflow.

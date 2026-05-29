@@ -9,6 +9,10 @@ import type {
   JobDecisionScorecard,
   JobInput,
   JobPosting,
+  JobSourceProvider,
+  CareerCoachReport,
+  InterviewSimulator,
+  MissingSkillsMarketplace,
   ParsedResume,
   ProfileSuggestion,
   Recommendation,
@@ -212,6 +216,9 @@ export function extractJobData(input: { text?: string; url?: string; recruiterEm
     applicationUrl,
     requiredSkills,
     confidence: clamp(35 + (titleLine ? 15 : 0) + (companyLine ? 10 : 0) + (locationLine ? 10 : 0) + requiredSkills.length * 3 + (applicationUrl ? 8 : 0)),
+    sourceProvider: detectJobSourceProvider(input.url || input.source || text),
+    sourceUrl: input.url || applicationUrl,
+    fetchedFromUrl: Boolean(input.url && input.text),
     extractionNotes: [
       "Review extracted fields before adding the job.",
       ...(input.url ? ["URL scraping is not performed in the local MVP; paste page content for best accuracy."] : []),
@@ -386,5 +393,120 @@ export function buildAnalytics(jobs: JobPosting[]): AnalyticsData {
     topMatchedSkills: countBy(jobs.flatMap((job) => job.requiredSkills.filter((skill) => job.matchScore >= 70))),
     commonMissingSkills: countBy(jobs.flatMap((job) => job.missingQualifications ?? [])),
     bestJobSources: sources
+  };
+}
+
+export function detectJobSourceProvider(value = ""): JobSourceProvider {
+  const text = normalize(value);
+  if (text.includes("greenhouse.io") || text.includes("boards.greenhouse")) return "Greenhouse";
+  if (text.includes("lever.co") || text.includes("jobs.lever")) return "Lever";
+  if (text.includes("workdayjobs") || text.includes("myworkdayjobs") || text.includes("workday")) return "Workday";
+  if (text.includes("recruiter") || text.includes("reply to") || text.includes("email")) return "Recruiter email";
+  if (text.includes("careers") || text.includes("jobs")) return "Company careers page";
+  if (text.startsWith("http")) return "Generic job URL";
+  return "Manual paste";
+}
+
+export function htmlToJobText(html: string) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const RESOURCE_LIBRARY: Record<string, { title: string; type: "YouTube" | "Course" | "Certification" | "Documentation"; url: string; why: string }[]> = {
+  can: [
+    { title: "CSS Electronics CAN Bus Explained", type: "Documentation", url: "https://www.csselectronics.com/pages/can-bus-simple-intro-tutorial", why: "Clear fundamentals for automotive networks." },
+    { title: "Vector CAN basics", type: "Course", url: "https://www.vector.com/", why: "Industry-standard tooling context for CAN work." }
+  ],
+  lin: [{ title: "LIN bus overview", type: "Documentation", url: "https://www.csselectronics.com/pages/lin-bus-protocol-intro-basics", why: "Useful companion skill for automotive validation roles." }],
+  ppap: [{ title: "AIAG PPAP overview", type: "Certification", url: "https://www.aiag.org/quality/automotive-core-tools/ppap", why: "Recognized automotive quality process knowledge." }],
+  python: [{ title: "Python for Everybody", type: "Course", url: "https://www.py4e.com/", why: "Practical beginner path for automation and data analysis." }],
+  selenium: [{ title: "Selenium documentation", type: "Documentation", url: "https://www.selenium.dev/documentation/", why: "Core web automation reference." }],
+  jira: [{ title: "Atlassian Jira fundamentals", type: "Course", url: "https://university.atlassian.com/student/catalog", why: "Helps document and triage defects professionally." }],
+  minitab: [{ title: "Minitab training", type: "Course", url: "https://www.minitab.com/en-us/training/", why: "Common quality and process analysis tool." }],
+  iso: [{ title: "ISO 9001 overview", type: "Documentation", url: "https://www.iso.org/iso-9001-quality-management.html", why: "Quality-system vocabulary for QA roles." }]
+};
+
+function resourcesForSkill(skill: string) {
+  const key = Object.keys(RESOURCE_LIBRARY).find((candidate) => normalize(skill).includes(candidate));
+  return RESOURCE_LIBRARY[key ?? ""] ?? [
+    { title: `Search: ${skill} fundamentals`, type: "YouTube" as const, url: `https://www.youtube.com/results?search_query=${encodeURIComponent(skill + " fundamentals")}`, why: "Fast way to learn vocabulary before deeper study." },
+    { title: `Coursera: ${skill}`, type: "Course" as const, url: `https://www.coursera.org/search?query=${encodeURIComponent(skill)}`, why: "Structured course options if this skill appears in multiple target roles." }
+  ];
+}
+
+export function buildMissingSkillsMarketplace(profile: UserProfile, job: JobPosting): MissingSkillsMarketplace {
+  const missing = (job.missingQualifications?.length ? job.missingQualifications : job.requiredSkills.filter((skill) => !profile.skills.some((profileSkill) => normalize(profileSkill).includes(normalize(skill))))).slice(0, 5);
+  const plans = missing.map((skill, index) => ({
+    skill,
+    currentImpact: Math.max(8, 22 - index * 3),
+    projectedScoreLift: Math.max(3, 9 - index),
+    explanation: `Learning ${skill} could improve confidence for ${job.title} because it appears in the job requirements but is not clearly present in the saved profile.`,
+    resources: resourcesForSkill(skill)
+  }));
+  const projectedScore = clamp(job.matchScore + plans.reduce((sum, plan) => sum + plan.projectedScoreLift, 0));
+  return { jobId: job.id, currentScore: job.matchScore, projectedScore, plans };
+}
+
+export function buildCareerCoachReport(profile: UserProfile, jobs: JobPosting[]): CareerCoachReport {
+  const applied = jobs.filter((job) => ["Applied", "Interview", "Offer", "Rejected"].includes(job.status));
+  const interviews = jobs.filter((job) => ["Interview", "Offer"].includes(job.status));
+  const missingCounts = Object.entries(jobs.flatMap((job) => job.missingQualifications ?? []).reduce((acc, skill) => ({ ...acc, [skill]: (acc[skill] ?? 0) + 1 }), {} as Record<string, number>))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+  const avgMatch = jobs.length ? Math.round(jobs.reduce((sum, job) => sum + job.matchScore, 0) / jobs.length) : 0;
+  return {
+    interviewDiagnosis: [
+      applied.length === 0 ? "No applications have been marked applied yet, so response data is not available." : `You have ${applied.length} submitted applications and ${interviews.length} interview/offer outcomes.`,
+      interviews.length === 0 && applied.length > 0 ? "If applications are not producing interviews, focus on stronger title alignment, measurable resume bullets, and applying to roles above 75% match first." : "Prioritize roles where your match score and missing qualification count are strongest.",
+      `Your average match score is ${avgMatch}%. Build a weekly habit around improving the top recurring missing skills.`
+    ],
+    missingSkills: missingCounts.map(([skill, count], index) => ({ skill, importance: index < 2 ? "High" : index < 4 ? "Medium" : "Low", reason: `Missing from ${count} matching role(s).` })),
+    careerGapAnalysis: [
+      profile.experience.length < 120 ? "Experience summary is short. Add 3-5 concrete bullets with tools, testing methods, and outcomes." : "Experience summary has enough detail for the MVP, but measurable outcomes would still strengthen it.",
+      profile.skills.length < 10 ? "Skill list is light for competitive testing roles. Add only tools/processes you can honestly discuss." : "Skill list is healthy; keep it tuned toward target job descriptions.",
+      profile.parsedResume?.certifications?.length ? "Certifications are visible in the parsed resume." : "Consider adding relevant certifications or courses if you truly completed them."
+    ],
+    salaryRecommendations: [
+      `Current target range is $${profile.desiredPayMin}-$${profile.desiredPayMax}/hr. Compare this against jobs above 80% match before lowering expectations.`,
+      "For technician/validation roles, ask whether overtime, shift differential, contract benefits, and training are included.",
+      "Track actual posted pay by source to calibrate your target range over time."
+    ],
+    resumeImprovements: profile.profileSuggestions ?? parseResumeText(profile.resume || profile.experience).suggestions,
+    interviewPrepFocus: [
+      "Prepare one STAR story about finding or documenting a defect.",
+      "Prepare one troubleshooting story involving unclear symptoms and a structured test plan.",
+      "Prepare a concise explanation of your target path into test engineering or validation.",
+      missingCounts[0] ? `Study fundamentals for ${missingCounts[0][0]} before interviews.` : "Review the required skills for each role before interviews."
+    ]
+  };
+}
+
+export function buildInterviewSimulator(profile: UserProfile, job: JobPosting): InterviewSimulator {
+  const skills = job.requiredSkills.slice(0, 4);
+  return {
+    jobId: job.id,
+    title: `Practice interview for ${job.company} ${job.title}`,
+    intro: "This mock interview is based on the saved job description, your profile, and the role's missing qualifications. Keep answers truthful and specific.",
+    questions: [
+      { category: "Role-specific", question: `Why are you interested in the ${job.title} role at ${job.company}?`, whyAsked: "Hiring teams want motivation and role clarity.", starSuggestion: "Connect the company/role to verified testing, technician, quality, or validation experience." },
+      { category: "Technical", question: `Walk me through how you would validate a defect involving ${skills[0] ?? "a test case"}.`, whyAsked: "Tests structured troubleshooting and validation thinking.", starSuggestion: "Situation: defect context. Task: what needed validation. Action: test steps/tools. Result: documented outcome." },
+      { category: "Technical", question: "Which tools from this role have you used, and where would you need ramp-up time?", whyAsked: "Checks honesty and tool readiness.", starSuggestion: "Be direct about verified tools; name one ramp-up plan for a missing skill." },
+      { category: "Behavioral", question: "Tell me about a time you found a problem others missed.", whyAsked: "Evaluates attention to detail and communication.", starSuggestion: "Use STAR with the defect, evidence, who you told, and what changed." },
+      { category: "Behavioral", question: "How do you document testing so engineers can act on the results?", whyAsked: "Documentation quality is critical for QA/test roles.", starSuggestion: "Mention reproduction steps, expected vs actual, environment, evidence, severity, and follow-up." },
+      { category: "Role-specific", question: `This job may require ${job.missingQualifications?.slice(0, 2).join(" and ") || "new tools"}. How would you close that gap?`, whyAsked: "Assesses coachability and learning plan.", starSuggestion: "State what you know, how you would learn, and how quickly you would apply it safely." }
+    ],
+    closingAdvice: [
+      "Do not invent hands-on experience. Explain adjacent experience and your learning plan.",
+      "Bring 2-3 questions about tools, training, defect workflow, and first-90-day expectations.",
+      `Re-read the posting and prepare examples around: ${skills.join(", ") || "testing, documentation, and troubleshooting"}.`
+    ]
   };
 }

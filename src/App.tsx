@@ -39,9 +39,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input, Label, Select, Textarea } from "./components/ui/form";
 import { Skeleton } from "./components/ui/skeleton";
-import type { AnalyticsData, ApplicationStatus, DashboardData, GeneratedApplication, ImportedJobDraft, JobDecisionScorecard, JobPosting, ResumeParseResult, UserProfile } from "../shared/types";
+import type { AnalyticsData, ApplicationStatus, CareerCoachReport, DashboardData, GeneratedApplication, ImportedJobDraft, InterviewSimulator, JobDecisionScorecard, JobPosting, MissingSkillsMarketplace, ResumeParseResult, UserProfile } from "../shared/types";
 
-type View = "pending" | "saved" | "profile" | "search" | "tracker";
+type View = "pending" | "saved" | "profile" | "search" | "tracker" | "coach";
 type Theme = "light" | "dark";
 type IconComponent = typeof LayoutDashboard;
 
@@ -52,7 +52,8 @@ const navItems: Array<{ id: View; label: string; icon: IconComponent; helper: st
   { id: "saved", label: "Saved roles", icon: Star, helper: "Shortlist", shortcut: "2" },
   { id: "search", label: "Add jobs", icon: Search, helper: "Manual intake", shortcut: "3" },
   { id: "profile", label: "Profile", icon: UserRound, helper: "Preferences", shortcut: "4" },
-  { id: "tracker", label: "Pipeline", icon: ClipboardCheck, helper: "Applications", shortcut: "5" }
+  { id: "tracker", label: "Pipeline", icon: ClipboardCheck, helper: "Applications", shortcut: "5" },
+  { id: "coach", label: "Career coach", icon: Target, helper: "Skills + interviews", shortcut: "6" }
 ];
 
 const blankJob = {
@@ -137,6 +138,30 @@ function App() {
     loadDashboard()
       .catch(() => toast.error("Could not reach the API. Make sure the Express server is running."))
       .finally(() => setIsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const encodedImport = params.get("importJob");
+    if (!encodedImport) return;
+
+    try {
+      const payload = JSON.parse(decodeURIComponent(encodedImport)) as { title?: string; url?: string; text?: string; recruiterEmail?: string };
+      setJobDraft({
+        ...blankJob,
+        title: payload.title?.replace(/[-|].*$/, "").trim() || "Imported browser job",
+        company: "Company to verify",
+        location: "Location to verify",
+        source: "Browser extension",
+        description: [payload.text, payload.recruiterEmail].filter(Boolean).join("\n\n"),
+        applicationUrl: payload.url || ""
+      });
+      setView("search");
+      toast.success("Job page captured from browser extension. Review extracted details before saving.");
+      window.history.replaceState({}, "", window.location.pathname);
+    } catch {
+      toast.error("Could not read the browser extension import payload.");
+    }
   }, []);
 
   useEffect(() => {
@@ -337,6 +362,7 @@ function App() {
                 {view === "search" && <ManualJobIntake jobDraft={jobDraft} setJobDraft={setJobDraft} addManualJob={addManualJob} isBusy={isBusy} />}
                 {view === "profile" && <ProfileEditor profileDraft={profileDraft} setProfileDraft={setProfileDraft} titlesDraft={titlesDraft} setTitlesDraft={setTitlesDraft} skillsDraft={skillsDraft} setSkillsDraft={setSkillsDraft} saveProfile={saveProfile} isBusy={isBusy} completion={calculateProfileCompletion({ ...profileDraft, preferredTitles: splitLines(titlesDraft), skills: splitLines(skillsDraft) })} onResumeFile={handleResumeFile} resumeParseResult={resumeParseResult} />}
                 {view === "tracker" && <ApplicationTracker jobs={trackerJobs} onGenerate={generateForJob} onStatus={updateStatus} progressPercent={progressPercent} />}
+                {view === "coach" && <CareerCoachPage jobs={jobs} />}
               </motion.div>
             </AnimatePresence>
           )}
@@ -528,6 +554,48 @@ function ApplicationTracker({ jobs, onGenerate, onStatus, progressPercent }: { j
   const maxCount = Math.max(1, ...statusCounts.map((item) => item.count));
 
   return <div className="grid gap-4"><Card><CardContent className="grid gap-6 p-6 lg:grid-cols-[1fr_360px]"><div><CardTitle className="text-2xl">Application pipeline</CardTitle><CardDescription>Move jobs from saved to applied, interview, offer, or rejected as your search progresses.</CardDescription><div className="mt-5"><ProgressLabel label="Pipeline progress" value={progressPercent} /></div></div><div className="flex items-end gap-2 rounded-[1.25rem] bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]" aria-label="Application status chart">{statusCounts.map((item) => <div key={item.status} className="flex flex-1 flex-col items-center gap-2"><div className="flex h-28 w-full items-end rounded-full bg-white/70 p-1 dark:bg-slate-950/40"><motion.div className="w-full rounded-full bg-gradient-to-t from-indigo-500 to-fuchsia-400" initial={{ height: 0 }} animate={{ height: `${Math.max(8, (item.count / maxCount) * 100)}%` }} transition={{ duration: 0.7, ease: "easeOut" }} /></div><span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">{item.status.slice(0, 3)}</span></div>)}</div></CardContent></Card><div className="grid gap-4 overflow-x-auto lg:grid-cols-5">{statusCounts.map(({ status }) => <Card key={status} className="min-h-[260px] min-w-[220px]"><CardHeader className="p-4"><CardTitle className="text-base">{status}</CardTitle></CardHeader><CardContent className="space-y-3 p-4 pt-0">{jobs.filter((job) => job.status === status).length === 0 && <p className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-400 dark:border-white/10">No roles yet.</p>}{jobs.filter((job) => job.status === status).map((job) => <div key={job.id} className="rounded-2xl bg-slate-950/[0.04] p-3 transition hover:-translate-y-0.5 dark:bg-white/[0.06]"><p className="font-semibold text-slate-900 dark:text-white">{job.title}</p><p className="text-sm text-slate-500 dark:text-slate-400">{job.company}</p><div className="mt-3 flex gap-2"><Button variant="secondary" size="sm" onClick={() => onGenerate(job)}>Docs</Button>{status !== "Interview" && <Button variant="ghost" size="sm" onClick={() => onStatus(job, "Interview")}>Interview</Button>}</div></div>)}</CardContent></Card>)}</div></div>;
+}
+
+function CareerCoachPage({ jobs }: { jobs: JobPosting[] }) {
+  const [report, setReport] = useState<CareerCoachReport | null>(null);
+  const [selectedJobId, setSelectedJobId] = useState(jobs[0]?.id ?? "");
+  const [marketplace, setMarketplace] = useState<MissingSkillsMarketplace | null>(null);
+  const [simulator, setSimulator] = useState<InterviewSimulator | null>(null);
+  const [loading, setLoading] = useState(false);
+  const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0];
+
+  useEffect(() => {
+    request<CareerCoachReport>("/api/career/coach").then(setReport).catch(() => toast.error("Could not load career coach report."));
+  }, []);
+
+  useEffect(() => {
+    if (!selectedJob) return;
+    setSelectedJobId(selectedJob.id);
+  }, [selectedJob?.id]);
+
+  const loadJobCoach = async () => {
+    if (!selectedJob) return;
+    setLoading(true);
+    try {
+      const [skills, interview] = await Promise.all([
+        request<MissingSkillsMarketplace>(`/api/jobs/${selectedJob.id}/skills-marketplace`),
+        request<InterviewSimulator>(`/api/jobs/${selectedJob.id}/interview`, { method: "POST" })
+      ]);
+      setMarketplace(skills);
+      setSimulator(interview);
+      toast.success(`Career coach loaded for ${selectedJob.company}.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load coach tools.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return <div className="grid gap-4"><Card><CardHeader className="flex-col gap-4 md:flex-row md:items-center md:justify-between"><div><CardTitle className="text-2xl">AI Career Coach</CardTitle><CardDescription>Diagnose why interviews are not happening, close missing skill gaps, and practice against real saved jobs.</CardDescription></div><Badge className="bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-300">sticky SaaS layer</Badge></CardHeader><CardContent className="grid gap-4 lg:grid-cols-3"><CoachList title="Why interviews may be low" items={report?.interviewDiagnosis ?? ["Loading coach report..."]} /><CoachList title="Career gap analysis" items={report?.careerGapAnalysis ?? []} /><CoachList title="Salary recommendations" items={report?.salaryRecommendations ?? []} /></CardContent></Card>{report && <Card><CardHeader><CardTitle>Recurring missing skills</CardTitle><CardDescription>These are the skills that can turn MomentumAI into a learning loop, not just an application tracker.</CardDescription></CardHeader><CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{report.missingSkills.length ? report.missingSkills.map((skill) => <div key={skill.skill} className="rounded-2xl bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><div className="flex items-center justify-between gap-2"><p className="font-semibold capitalize">{skill.skill}</p><Badge className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">{skill.importance}</Badge></div><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{skill.reason}</p></div>) : <EmptyState icon={CheckCircle2} title="No recurring missing skills yet" description="Import more real jobs to build a better learning map." />}</CardContent></Card>}<Card><CardHeader className="flex-col gap-3 md:flex-row md:items-end md:justify-between"><div><CardTitle>Missing Skills Marketplace + Interview Simulator</CardTitle><CardDescription>Pick a saved job to see score lift opportunities and realistic interview practice.</CardDescription></div><div className="flex gap-2"><Select value={selectedJobId} onChange={(event) => setSelectedJobId(event.target.value)}>{jobs.map((job) => <option key={job.id} value={job.id}>{job.company} · {job.title}</option>)}</Select><Button variant="gradient" onClick={loadJobCoach} disabled={loading || !selectedJob}>{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Analyze</Button></div></CardHeader><CardContent className="grid gap-4 lg:grid-cols-2">{marketplace ? <div className="rounded-[1.25rem] bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><div className="flex items-center justify-between"><p className="font-semibold">Score lift plan</p><Badge className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-300">{marketplace.currentScore}% to {marketplace.projectedScore}%</Badge></div><div className="mt-4 space-y-3">{marketplace.plans.length ? marketplace.plans.map((plan) => <div key={plan.skill} className="rounded-2xl bg-white/70 p-3 dark:bg-slate-950/30"><div className="flex items-center justify-between gap-2"><p className="font-semibold capitalize">{plan.skill}</p><span className="text-sm text-emerald-500">+{plan.projectedScoreLift}%</span></div><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{plan.explanation}</p><div className="mt-2 flex flex-wrap gap-2">{plan.resources.map((resource) => <a key={resource.url} href={resource.url} target="_blank" rel="noreferrer" className="rounded-full bg-indigo-500/10 px-3 py-1 text-xs font-semibold text-indigo-600 hover:bg-indigo-500/20 dark:text-indigo-300">{resource.type}: {resource.title}</a>)}</div></div>) : <p className="text-sm text-slate-500 dark:text-slate-400">This role has no obvious missing skills.</p>}</div></div> : <EmptyState icon={Target} title="Analyze a job" description="Generate skill-gap resources and projected score lift for any saved role." />}{simulator ? <div className="rounded-[1.25rem] bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><p className="font-semibold">{simulator.title}</p><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{simulator.intro}</p><div className="mt-4 space-y-3">{simulator.questions.slice(0, 5).map((item) => <div key={item.question} className="rounded-2xl bg-white/70 p-3 dark:bg-slate-950/30"><Badge>{item.category}</Badge><p className="mt-2 font-semibold">{item.question}</p><p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Why: {item.whyAsked}</p><p className="mt-1 text-sm text-indigo-600 dark:text-indigo-300">STAR: {item.starSuggestion}</p></div>)}</div></div> : <EmptyState icon={Wand2} title="Practice interview" description="Generate technical, behavioral, and role-specific questions from the selected posting." />}</CardContent></Card></div>;
+}
+
+function CoachList({ title, items }: { title: string; items: string[] }) {
+  return <div className="rounded-[1.25rem] bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><p className="font-semibold">{title}</p><ul className="mt-3 space-y-2 text-sm leading-6 text-slate-600 dark:text-slate-300">{items.map((item) => <li key={item} className="flex gap-2"><CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-emerald-500" />{item}</li>)}</ul></div>;
 }
 
 function CommandPalette({ open, setOpen, commandQuery, setCommandQuery, setView, setTheme, theme, jobs, generateForJob }: { open: boolean; setOpen: (open: boolean) => void; commandQuery: string; setCommandQuery: (query: string) => void; setView: (view: View) => void; setTheme: (theme: Theme) => void; theme: Theme; jobs: JobPosting[]; generateForJob: (job: JobPosting) => void }) {
