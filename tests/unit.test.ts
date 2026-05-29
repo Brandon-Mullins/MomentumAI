@@ -9,6 +9,7 @@ import {
   parseResumeText,
   scoreJob
 } from "../shared/matching";
+import { buildResumeStudio, escapeLatex } from "../shared/resumeStudio";
 import { defaultProfile } from "../shared/seedData";
 import { buildMomentumScore } from "../server/index";
 import type { JobPosting } from "../shared/types";
@@ -94,4 +95,41 @@ test("analytics and marketplace remain stable with demo jobs", () => {
   assert.ok(marketplace.projectedScore >= marketplace.currentScore);
   assert.ok(coach.interviewDiagnosis.length > 0);
   assert.ok(generated.checklist.some((item) => item.includes("Do not claim")));
+});
+
+
+test("escapeLatex escapes Overleaf special characters", () => {
+  assert.equal(
+    escapeLatex("CAN & LIN_100% #1 $value {test}"),
+    "CAN \\& LIN\\_100\\% \\#1 \\$value \\{test\\}"
+  );
+});
+
+test("buildResumeStudio creates professional editable resume assets", () => {
+  const job: JobPosting = {
+    id: "job-3",
+    createdAt: new Date().toISOString(),
+    status: "Pending",
+    ...scoreJob(defaultProfile, {
+      title: "Automotive Validation Engineer",
+      company: "Ford",
+      location: "Dearborn, MI",
+      source: "Unit test",
+      pay: "$38/hr",
+      description: "Automotive validation role requiring CAN, Jira, diagnostics, test cases, root cause, PPAP, and documentation."
+    })
+  };
+  const generated = generateApplication(defaultProfile, job);
+  const studio = buildResumeStudio(defaultProfile, job, generated, {
+    template: "Automotive Test Engineer",
+    coverLetterStyle: "Automotive",
+    pageLength: "one-page"
+  });
+
+  assert.ok(studio.resumeTex.includes("\\documentclass"));
+  assert.ok(studio.resumeTex.includes("EDITABLE EXPERIENCE"));
+  assert.ok(studio.coverLetterTex.includes("\\begin{letter}"));
+  assert.ok(studio.score.atsScore > 0);
+  assert.ok(studio.warnings.some((warning) => warning.includes("Do not claim")));
+  assert.ok(studio.includedSections.some((section) => section.section === "Core Skills"));
 });

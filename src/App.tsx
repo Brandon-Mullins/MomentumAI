@@ -34,6 +34,7 @@ import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
 import { buildAnalytics, buildCareerCoachReport, buildInterviewSimulator, buildMissingSkillsMarketplace, generateApplication as generateLocalApplication, scoreJob } from "../shared/matching";
+import { buildResumeStudio, type CoverLetterStudioStyle, type ResumePageLength, type ResumeTemplate } from "../shared/resumeStudio";
 import { defaultProfile, seedJobs } from "../shared/seedData";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -601,7 +602,7 @@ function App() {
       </div>
 
       <CommandPalette open={commandOpen} setOpen={setCommandOpen} commandQuery={commandQuery} setCommandQuery={setCommandQuery} setView={setView} setTheme={setTheme} theme={theme} jobs={jobs} generateForJob={generateForJob} />
-      <ApplicationDialog generated={generated} activeJob={activeJob} setGenerated={setGenerated} onApplied={(job) => updateStatus(job, "Applied")} />
+      <ApplicationDialog generated={generated} activeJob={activeJob} profile={dashboard?.profile ?? null} setGenerated={setGenerated} onApplied={(job) => updateStatus(job, "Applied")} />
       <SettingsDialog open={settingsOpen} setOpen={setSettingsOpen} user={authUser} onSave={saveSettings} isBusy={isBusy} />
       <OnboardingDialog open={showOnboarding && !localDemoMode} onComplete={completeOnboarding} setView={setView} setProgress={updateOnboardingProgress} />
     </div>
@@ -963,9 +964,30 @@ function CommandPalette({ open, setOpen, commandQuery, setCommandQuery, setView,
   return <Dialog open={open} onOpenChange={setOpen}><DialogContent className="max-w-2xl"><div className="p-4"><div className="relative"><Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><Input autoFocus value={commandQuery} onChange={(event) => setCommandQuery(event.target.value)} placeholder="Jump to pages, find jobs, generate docs..." className="h-14 rounded-2xl pl-11 text-base" /></div><div className="mt-4 max-h-[60vh] overflow-y-auto"><p className="px-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Navigate</p><div className="mt-2 grid gap-1">{actions.map((item) => { const Icon = item.icon; return <button key={item.id} onClick={() => { setView(item.id); setOpen(false); }} className="flex items-center gap-3 rounded-2xl p-3 text-left transition hover:bg-slate-950/5 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:hover:bg-white/10"><Icon className="h-4 w-4 text-indigo-500" /><div className="flex-1"><p className="font-semibold">{item.label}</p><p className="text-sm text-slate-500 dark:text-slate-400">{item.helper}</p></div><kbd className="rounded-md bg-slate-950/5 px-2 py-1 text-xs text-slate-400 dark:bg-white/10">{item.shortcut}</kbd></button>; })}</div><p className="mt-4 px-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Quick actions</p><button onClick={() => { setTheme(theme === "dark" ? "light" : "dark"); setOpen(false); }} className="mt-2 flex w-full items-center gap-3 rounded-2xl p-3 text-left transition hover:bg-slate-950/5 dark:hover:bg-white/10"><Keyboard className="h-4 w-4 text-indigo-500" /><div><p className="font-semibold">Toggle theme</p><p className="text-sm text-slate-500 dark:text-slate-400">Switch between dark and light mode</p></div></button>{matchingJobs.length > 0 && <><p className="mt-4 px-2 text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Jobs</p><div className="mt-2 grid gap-1">{matchingJobs.map((job) => <button key={job.id} onClick={() => { generateForJob(job); setOpen(false); }} className="flex items-center gap-3 rounded-2xl p-3 text-left transition hover:bg-slate-950/5 dark:hover:bg-white/10"><Briefcase className="h-4 w-4 text-indigo-500" /><div className="flex-1"><p className="font-semibold">{job.title}</p><p className="text-sm text-slate-500 dark:text-slate-400">{job.company} · {job.matchScore}% match</p></div><ArrowRight className="h-4 w-4 text-slate-400" /></button>)}</div></>}</div></div></DialogContent></Dialog>;
 }
 
-function ApplicationDialog({ generated, activeJob, setGenerated, onApplied }: { generated: GeneratedApplication | null; activeJob: JobPosting | null; setGenerated: (generated: GeneratedApplication | null) => void; onApplied: (job: JobPosting) => void }) {
-  const [tab, setTab] = useState("resume");
+function ApplicationDialog({ generated, activeJob, profile, setGenerated, onApplied }: { generated: GeneratedApplication | null; activeJob: JobPosting | null; profile: UserProfile | null; setGenerated: (generated: GeneratedApplication | null) => void; onApplied: (job: JobPosting) => void }) {
+  const [tab, setTab] = useState("preview");
+  const [template, setTemplate] = useState<ResumeTemplate>("ATS Optimized");
+  const [coverStyle, setCoverStyle] = useState<CoverLetterStudioStyle>("Professional");
+  const [pageLength, setPageLength] = useState<ResumePageLength>("one-page");
+
+  const studio = generated && activeJob && profile ? buildResumeStudio(profile, activeJob, generated, { template, coverLetterStyle: coverStyle, pageLength }) : null;
+  const legacyDocs = generated && activeJob ? [
+    { id: "recruiter", label: "Recruiter", title: "Recruiter message", value: generated.packet?.recruiterMessage ?? "" },
+    { id: "linkedin", label: "LinkedIn", title: "LinkedIn message", value: generated.packet?.linkedInMessage ?? "" },
+    { id: "interview", label: "Interview", title: "Interview talking points", value: generated.packet?.interviewTalkingPoints.join("\n") ?? "" }
+  ] : [];
+  const legacyDoc = legacyDocs.find((doc) => doc.id === tab);
+
   const copy = async (value: string, label: string) => { await navigator.clipboard.writeText(value); toast.success(`${label} copied.`); };
+  const downloadBlob = (filename: string, content: BlobPart, type = "text/plain;charset=utf-8") => {
+    const blob = content instanceof Blob ? content : new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
   const exportPdf = async (title: string, value: string) => {
     const { default: jsPDF } = await import("jspdf");
     const pdf = new jsPDF({ unit: "pt", format: "letter" });
@@ -986,20 +1008,51 @@ function ApplicationDialog({ generated, activeJob, setGenerated, onApplied }: { 
     pdf.save(`${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.pdf`);
     toast.success(`${title} exported as PDF.`);
   };
+  const exportDocx = async () => {
+    if (!studio || !activeJob) return;
+    const { Document, Packer, Paragraph, TextRun } = await import("docx");
+    const doc = new Document({ sections: [{ children: studio.resumePlainText.split("\n").map((line) => new Paragraph({ children: [new TextRun(line)] })) }] });
+    const blob = await Packer.toBlob(doc);
+    downloadBlob(`${activeJob.company}-resume.docx`, blob, "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  };
+  const exportZip = async () => {
+    if (!studio || !activeJob) return;
+    const { default: JSZip } = await import("jszip");
+    const zip = new JSZip();
+    zip.file("resume.txt", studio.resumePlainText);
+    zip.file("coverletter.txt", studio.coverLetterPlainText);
+    zip.file("resume.tex", studio.resumeTex);
+    zip.file("coverletter.tex", studio.coverLetterTex);
+    zip.file("README.txt", "Review every generated line for accuracy. Do not claim experience, tools, or credentials you do not have.");
+    const blob = await zip.generateAsync({ type: "blob" });
+    downloadBlob(`${activeJob.company}-application-package.zip`, blob, "application/zip");
+  };
 
-  const docs = generated && activeJob ? [
-    { id: "resume", label: "Resume", title: "Tailored resume draft", value: generated.resume },
-    { id: "summary", label: "Summary", title: "Tailored resume summary", value: generated.packet?.tailoredResumeSummary ?? "" },
-    { id: "skills", label: "Skills", title: "Tailored skills section", value: generated.packet?.tailoredSkillsSection ?? "" },
-    { id: "bullets", label: "Bullets", title: "Tailored bullet suggestions", value: generated.packet?.tailoredBulletSuggestions.join("\n") ?? "" },
-    { id: "cover", label: "Cover letter", title: "Cover letter draft", value: generated.coverLetter },
-    { id: "recruiter", label: "Recruiter", title: "Recruiter message", value: generated.packet?.recruiterMessage ?? "" },
-    { id: "linkedin", label: "LinkedIn", title: "LinkedIn message", value: generated.packet?.linkedInMessage ?? "" },
-    { id: "interview", label: "Interview", title: "Interview talking points", value: generated.packet?.interviewTalkingPoints.join("\n") ?? "" }
-  ] : [];
-  const activeDoc = docs.find((doc) => doc.id === tab) ?? docs[0];
+  const tabs = [
+    { id: "preview", label: "Preview" },
+    { id: "score", label: "Resume Score" },
+    { id: "resumeTex", label: "resume.tex" },
+    { id: "coverTex", label: "coverletter.tex" },
+    { id: "cover", label: "Cover Letter" },
+    { id: "exports", label: "Export Center" },
+    ...legacyDocs.map((doc) => ({ id: doc.id, label: doc.label }))
+  ];
 
-  return <Dialog open={Boolean(generated && activeJob)} onOpenChange={(open) => !open && setGenerated(null)}><DialogContent>{generated && activeJob && activeDoc && <div className="max-h-[90vh] overflow-y-auto p-6 md:p-8"><DialogHeader className="pr-10"><Badge className="w-fit bg-amber-500/10 text-amber-600 dark:text-amber-300">Manual review required</Badge><DialogTitle>Application packet for {activeJob.company}</DialogTitle><DialogDescription>Generated content is based only on your saved profile and this job description. Review for accuracy before submitting anywhere.</DialogDescription></DialogHeader><div className="mt-5 flex gap-2 overflow-x-auto pb-2">{docs.map((doc) => <button key={doc.id} onClick={() => setTab(doc.id)} className={`shrink-0 rounded-full px-3 py-2 text-sm font-semibold transition ${activeDoc.id === doc.id ? "bg-slate-950 text-white dark:bg-white dark:text-slate-950" : "bg-slate-950/5 text-slate-500 hover:bg-slate-950/10 dark:bg-white/10 dark:text-slate-300 dark:hover:bg-white/15"}`}>{doc.label}</button>)}</div><div className="mt-4"><DocumentBox title={activeDoc.title} value={activeDoc.value} onCopy={() => copy(activeDoc.value, activeDoc.title)} onExport={() => exportPdf(`${activeJob.company} ${activeDoc.title}`, activeDoc.value)} /></div><div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-400/20 dark:bg-amber-400/10"><p className="font-semibold text-amber-900 dark:text-amber-100">Safety and accuracy checklist</p><ul className="mt-2 space-y-2 text-sm text-amber-800 dark:text-amber-100/80">{generated.checklist.map((item) => <li key={item} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />{item}</li>)}</ul></div><div className="mt-6 flex flex-wrap justify-end gap-3"><Button variant="secondary" onClick={() => setGenerated(null)}>Keep reviewing</Button><Button variant="gradient" onClick={() => onApplied(activeJob)}><CheckCircle2 className="h-4 w-4" /> I submitted it, mark applied</Button></div></div>}</DialogContent></Dialog>;
+  return <Dialog open={Boolean(generated && activeJob)} onOpenChange={(open) => !open && setGenerated(null)}><DialogContent>{generated && activeJob && studio && <div className="max-h-[92vh] overflow-y-auto p-4 md:p-8"><DialogHeader className="pr-10"><Badge className="w-fit bg-amber-500/10 text-amber-600 dark:text-amber-300">Professional Resume Studio</Badge><DialogTitle>Application package for {activeJob.company}</DialogTitle><DialogDescription>Overleaf-ready LaTeX, ATS scoring, editable previews, and exports. Uses only verified profile information and this job description.</DialogDescription></DialogHeader><div className="mt-5 grid gap-3 lg:grid-cols-3"><Label>Resume template<Select value={template} onChange={(event) => setTemplate(event.target.value as ResumeTemplate)}><option>Automotive Test Engineer</option><option>Validation Engineer</option><option>Engineering Technician</option><option>Quality Engineer</option><option>ATS Optimized</option><option>Executive Professional</option></Select></Label><Label>Cover letter style<Select value={coverStyle} onChange={(event) => setCoverStyle(event.target.value as CoverLetterStudioStyle)}><option>Professional</option><option>Technical</option><option>Executive</option><option>Automotive</option><option>Concise</option></Select></Label><Label>Length<Select value={pageLength} onChange={(event) => setPageLength(event.target.value as ResumePageLength)}><option value="one-page">One-page resume</option><option value="two-page">Two-page resume</option></Select></Label></div><div className="mt-5 flex gap-2 overflow-x-auto pb-2">{tabs.map((item) => <button key={item.id} onClick={() => setTab(item.id)} className={`shrink-0 rounded-full px-3 py-2 text-sm font-semibold transition ${tab === item.id ? "bg-slate-950 text-white dark:bg-white dark:text-slate-950" : "bg-slate-950/5 text-slate-500 hover:bg-slate-950/10 dark:bg-white/10 dark:text-slate-300 dark:hover:bg-white/15"}`}>{item.label}</button>)}</div>{tab === "preview" && <ResumePreview studio={studio} activeJob={activeJob} pageLength={pageLength} />}{tab === "score" && <ResumeScorePanel studio={studio} />}{tab === "resumeTex" && <DocumentBox title="Overleaf resume.tex" value={studio.resumeTex} onCopy={() => copy(studio.resumeTex, "resume.tex")} onExport={() => downloadBlob("resume.tex", studio.resumeTex)} />}{tab === "coverTex" && <DocumentBox title="Overleaf coverletter.tex" value={studio.coverLetterTex} onCopy={() => copy(studio.coverLetterTex, "coverletter.tex")} onExport={() => downloadBlob("coverletter.tex", studio.coverLetterTex)} />}{tab === "cover" && <DocumentBox title={`${coverStyle} cover letter`} value={studio.coverLetterPlainText} onCopy={() => copy(studio.coverLetterPlainText, "Cover letter")} onExport={() => exportPdf(`${activeJob.company} cover letter`, studio.coverLetterPlainText)} />}{legacyDoc && <DocumentBox title={legacyDoc.title} value={legacyDoc.value} onCopy={() => copy(legacyDoc.value, legacyDoc.title)} onExport={() => exportPdf(`${activeJob.company} ${legacyDoc.title}`, legacyDoc.value)} />}{tab === "exports" && <ExportCenter studio={studio} activeJob={activeJob} onPdf={() => exportPdf(`${activeJob.company} resume`, studio.resumePlainText)} onDocx={exportDocx} onZip={exportZip} onResumeTex={() => downloadBlob("resume.tex", studio.resumeTex)} onCoverTex={() => downloadBlob("coverletter.tex", studio.coverLetterTex)} />}<div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-400/20 dark:bg-amber-400/10"><p className="font-semibold text-amber-900 dark:text-amber-100">Production-quality safety checklist</p><ul className="mt-2 space-y-2 text-sm text-amber-800 dark:text-amber-100/80">{studio.warnings.map((item) => <li key={item} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />{item}</li>)}</ul></div><div className="mt-6 flex flex-wrap justify-end gap-3"><Button variant="secondary" onClick={() => setGenerated(null)}>Keep editing</Button><Button variant="gradient" onClick={() => onApplied(activeJob)}><CheckCircle2 className="h-4 w-4" /> I submitted it, mark applied</Button></div></div>}</DialogContent></Dialog>;
+}
+
+function ResumePreview({ studio, activeJob, pageLength }: { studio: ReturnType<typeof buildResumeStudio>; activeJob: JobPosting; pageLength: ResumePageLength }) {
+  return <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_320px]"><div className="rounded-[1.25rem] bg-slate-200 p-4 dark:bg-slate-900"><div className="mx-auto min-h-[760px] max-w-[720px] bg-white p-8 text-slate-950 shadow-2xl"><pre className="whitespace-pre-wrap font-serif text-sm leading-6">{studio.resumePlainText}</pre>{pageLength === "two-page" && <><div className="my-8 border-t border-dashed border-slate-300 text-center text-xs text-slate-400">Page break</div><pre className="whitespace-pre-wrap font-serif text-sm leading-6">{studio.coverLetterPlainText}</pre></>}</div></div><div className="grid gap-3"><Card><CardHeader><CardTitle>Why sections were included</CardTitle><CardDescription>{activeJob.title} at {activeJob.company}</CardDescription></CardHeader><CardContent className="space-y-3">{studio.includedSections.map((item) => <div key={item.section} className="rounded-2xl bg-slate-950/[0.04] p-3 dark:bg-white/[0.06]"><p className="font-semibold">{item.section}</p><p className="text-sm text-slate-500 dark:text-slate-400">{item.why}</p></div>)}</CardContent></Card></div></div>;
+}
+
+function ResumeScorePanel({ studio }: { studio: ReturnType<typeof buildResumeStudio> }) {
+  const metrics = [{ label: "ATS Score", value: studio.score.atsScore }, { label: "Readability", value: studio.score.readabilityScore }, { label: "Match Score", value: studio.score.matchScore }, { label: "Keyword Coverage", value: studio.score.keywordCoverage }];
+  return <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_360px]"><Card><CardHeader><CardTitle>Resume score</CardTitle><CardDescription>Use this before exporting. Scores are guidance, not guarantees.</CardDescription></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2">{metrics.map((metric) => <div key={metric.label} className="rounded-2xl bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]"><div className="flex items-center justify-between"><p className="font-semibold">{metric.label}</p><span>{metric.value}%</span></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10"><div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500" style={{ width: `${metric.value}%` }} /></div></div>)}</CardContent></Card><Card><CardHeader><CardTitle>Recommendations</CardTitle></CardHeader><CardContent><div className="mb-4 flex flex-wrap gap-2">{studio.score.missingKeywords.map((keyword) => <Badge key={keyword} className="bg-amber-500/10 text-amber-600 dark:text-amber-300">{keyword}</Badge>)}</div><ul className="space-y-2 text-sm text-slate-600 dark:text-slate-300">{studio.score.recommendations.map((item) => <li key={item} className="flex gap-2"><Target className="mt-0.5 h-4 w-4 shrink-0 text-indigo-500" />{item}</li>)}</ul></CardContent></Card></div>;
+}
+
+function ExportCenter({ studio, activeJob, onPdf, onDocx, onZip, onResumeTex, onCoverTex }: { studio: ReturnType<typeof buildResumeStudio>; activeJob: JobPosting; onPdf: () => void; onDocx: () => void; onZip: () => void; onResumeTex: () => void; onCoverTex: () => void }) {
+  const exports = [{ label: "PDF", text: "Download a clean resume PDF.", action: onPdf }, { label: "DOCX", text: "Download Word-editable resume.docx.", action: onDocx }, { label: "TEX", text: "Download resume.tex and coverletter.tex.", action: () => { onResumeTex(); onCoverTex(); } }, { label: "ZIP", text: "Download full application package.", action: onZip }];
+  return <div className="mt-4"><Card><CardHeader><CardTitle>Export center</CardTitle><CardDescription>Export professional materials for {activeJob.company}. Everything remains editable before submission.</CardDescription></CardHeader><CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{exports.map((item) => <button key={item.label} onClick={item.action} className="rounded-2xl border border-slate-200 bg-white/70 p-5 text-left transition hover:-translate-y-1 hover:border-indigo-300 dark:border-white/10 dark:bg-white/[0.06]"><p className="text-xl font-semibold">{item.label}</p><p className="mt-2 text-sm text-slate-500 dark:text-slate-400">{item.text}</p></button>)}</CardContent></Card><div className="mt-4 rounded-2xl bg-slate-950/[0.04] p-4 text-sm text-slate-600 dark:bg-white/[0.06] dark:text-slate-300"><strong>Overleaf note:</strong> Upload <code>resume.tex</code> or <code>coverletter.tex</code> directly into Overleaf. Comments in the generated code mark editable sections.</div></div>;
 }
 
 function OnboardingDialog({ open, onComplete, setView, setProgress }: { open: boolean; onComplete: () => void; setView: (view: View) => void; setProgress: (progress: number) => void }) {
