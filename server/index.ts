@@ -407,6 +407,19 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, database: supabase ? "supabase" : "demo-memory", message: supabase ? "Connected to Supabase client" : "Running with in-memory demo data until Supabase env vars are configured" });
 });
 
+app.get("/api/ready", (_req, res) => {
+  const production = process.env.NODE_ENV === "production";
+  const checks = {
+    server: true,
+    supabaseConfigured: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),
+    corsConfigured: !production || allowedOrigins.length > 0,
+    demoAuthDisabledInProduction: !production || !allowDemoAuth,
+    requestBodyLimit
+  };
+  const ready = checks.server && checks.corsConfigured && checks.demoAuthDisabledInProduction;
+  res.status(ready ? 200 : 503).json({ ready, checks, timestamp: new Date().toISOString() });
+});
+
 app.get("/api/dashboard", (req: RequestWithUser, res) => {
   const user = currentUser(req);
   const workspace = currentWorkspace(req);

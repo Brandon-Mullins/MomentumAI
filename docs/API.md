@@ -8,6 +8,11 @@ Authorization: Bearer <token>
 
 When `ALLOW_DEMO_AUTH` is not `false`, unauthenticated local requests use the demo workspace.
 
+## Health
+
+- `GET /api/health` - basic liveness.
+- `GET /api/ready` - deployment readiness checks for CORS/demo auth/configuration.
+
 ## Auth
 
 - `POST /api/auth/register` - create an account.

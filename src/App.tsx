@@ -86,26 +86,81 @@ function fileToBase64(file: File) {
   });
 }
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+const DASHBOARD_CACHE_PREFIX = "momentumai-dashboard-cache";
+
+class ApiError extends Error {
+  status?: number;
+  retryable: boolean;
+
+  constructor(message: string, options: { status?: number; retryable?: boolean } = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = options.status;
+    this.retryable = options.retryable ?? false;
+  }
+}
+
 function authToken() {
   return localStorage.getItem("momentumai-token") || "";
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const token = authToken();
-  const response = await fetch(path, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers
-    },
-    ...options
-  });
+function dashboardCacheKey() {
+  return `${DASHBOARD_CACHE_PREFIX}:${authToken() || "demo"}`;
+}
 
-  if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function request<T>(path: string, options: RequestInit & { retries?: number; timeoutMs?: number } = {}): Promise<T> {
+  const token = authToken();
+  const method = options.method ?? "GET";
+  const retries = options.retries ?? (method === "GET" ? 2 : 0);
+  const timeoutMs = options.timeoutMs ?? 10000;
+  const url = path.startsWith("http") ? path : `${API_BASE_URL}${path}`;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(url, {
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...options.headers
+        },
+        ...options,
+        signal: controller.signal
+      });
+      window.clearTimeout(timeout);
+
+      if (!response.ok) {
+        let message = `Request failed: ${response.status}`;
+        try {
+          const body = await response.json();
+          message = body.error || body.message || message;
+        } catch {
+          // Keep the status-based message when the response is not JSON.
+        }
+        throw new ApiError(message, { status: response.status, retryable: response.status >= 500 || response.status === 429 });
+      }
+
+      if (response.status === 204) return undefined as T;
+      return response.json() as Promise<T>;
+    } catch (error) {
+      window.clearTimeout(timeout);
+      lastError = error;
+      const retryable = error instanceof ApiError ? error.retryable : true;
+      if (!retryable || attempt === retries) break;
+      await sleep(350 * 2 ** attempt);
+    }
   }
 
-  return response.json() as Promise<T>;
+  if (lastError instanceof Error) throw lastError;
+  throw new ApiError("MomentumAI service is temporarily unavailable. Please try again.", { retryable: true });
 }
 
 function App() {
@@ -127,6 +182,8 @@ function App() {
   const [commandOpen, setCommandOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isBusy, setIsBusy] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [usingCachedDashboard, setUsingCachedDashboard] = useState(false);
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("theme") as Theme) || "dark");
   const [showOnboarding, setShowOnboarding] = useState(() => localStorage.getItem("job-copilot-onboarded") !== "true");
 
@@ -135,15 +192,40 @@ function App() {
     localStorage.setItem("theme", theme);
   }, [theme]);
 
-  const loadDashboard = async () => {
-    const data = await request<DashboardData>("/api/dashboard");
+  const applyDashboard = (data: DashboardData, options: { cached?: boolean } = {}) => {
     setDashboard(data);
     setAuthUser(data.user ?? null);
     setNeedsAuth(false);
     setProfileDraft(data.profile);
     setTitlesDraft(joinLines(data.profile.preferredTitles));
     setSkillsDraft(joinLines(data.profile.skills));
+    setUsingCachedDashboard(Boolean(options.cached));
   };
+
+  const loadDashboard = async (options: { allowCache?: boolean } = {}) => {
+    try {
+      const data = await request<DashboardData>("/api/dashboard");
+      applyDashboard(data);
+      setWorkspaceError(null);
+      localStorage.setItem(dashboardCacheKey(), JSON.stringify({ data, cachedAt: new Date().toISOString() }));
+    } catch (error) {
+      const cached = options.allowCache !== false ? localStorage.getItem(dashboardCacheKey()) : null;
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached) as { data: DashboardData; cachedAt: string };
+          applyDashboard(parsed.data, { cached: true });
+          setWorkspaceError(`Using cached workspace from ${new Date(parsed.cachedAt).toLocaleString()}. Live updates will resume when the API reconnects.`);
+          return;
+        } catch {
+          localStorage.removeItem(dashboardCacheKey());
+        }
+      }
+      const message = error instanceof Error ? error.message : "MomentumAI could not reach the workspace service.";
+      setWorkspaceError(message);
+      throw error;
+    }
+  };
+
 
   useEffect(() => {
     if (needsAuth) {
@@ -151,7 +233,7 @@ function App() {
       return;
     }
     loadDashboard()
-      .catch(() => toast.error("Could not reach the API. Make sure the Express server is running."))
+      .catch(() => toast.error("MomentumAI is having trouble reaching your workspace. Retrying and cached mode are available."))
       .finally(() => setIsLoading(false));
   }, [needsAuth]);
 
@@ -385,10 +467,12 @@ function App() {
         <main id="main-content" className="flex min-w-0 flex-1 flex-col gap-4">
           <TopBar query={query} setQuery={setQuery} theme={theme} setTheme={setTheme} onAddJob={() => setView("search")} onCommand={() => setCommandOpen(true)} onSettings={() => setSettingsOpen(true)} onLogout={logout} profile={dashboard?.profile} user={authUser} />
 
+          {workspaceError && dashboard && <ServiceStatusBanner message={workspaceError} cached={usingCachedDashboard} onRetry={() => loadDashboard({ allowCache: false })} />}
+
           {isLoading ? (
             <DashboardSkeleton />
           ) : !dashboard || !profileDraft ? (
-            <EmptyState icon={XCircle} title="Could not load your workspace" description="The frontend is running, but the API did not return dashboard data. Restart the API and refresh." action={<Button onClick={() => window.location.reload()}>Refresh</Button>} />
+            <WorkspaceServiceStatus error={workspaceError} onRetry={() => loadDashboard({ allowCache: false })} onSignOut={logout} />
           ) : (
             <AnimatePresence mode="wait">
               <motion.div
@@ -837,6 +921,14 @@ function MetricTile({ value, label }: { value: number; label: string }) {
 
 function InfoPill({ icon: Icon, text }: { icon: IconComponent; text: string }) {
   return <div className="flex min-w-0 items-center gap-2 rounded-2xl bg-slate-950/[0.04] px-3 py-2 dark:bg-white/[0.06]"><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{text}</span></div>;
+}
+
+function ServiceStatusBanner({ message, cached, onRetry }: { message: string; cached: boolean; onRetry: () => void }) {
+  return <Card className="border-amber-300/40 bg-amber-50/90 dark:border-amber-400/20 dark:bg-amber-400/10"><CardContent className="flex flex-col gap-3 p-4 text-amber-900 dark:text-amber-100 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="font-semibold">{cached ? "Showing cached workspace" : "Workspace connection needs attention"}</p><p className="text-sm leading-6 opacity-80">{message}</p></div></div><Button variant="secondary" onClick={onRetry}>Retry now</Button></CardContent></Card>;
+}
+
+function WorkspaceServiceStatus({ error, onRetry, onSignOut }: { error: string | null; onRetry: () => void; onSignOut: () => void }) {
+  return <Card className="overflow-hidden border-white/70 bg-white/80 dark:border-white/10 dark:bg-white/[0.06]"><CardContent className="grid gap-6 p-6 md:grid-cols-[1fr_320px]"><div><Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-300">Service status</Badge><h2 className="mt-4 text-3xl font-semibold tracking-[-0.05em] text-slate-950 dark:text-white">We could not sync your live workspace yet.</h2><p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-300">MomentumAI automatically retried the request and checked for cached data. Your account is still safe; this usually means the API URL, hosting environment, or network tunnel needs attention.</p><div className="mt-5 rounded-2xl bg-slate-950/[0.04] p-4 text-sm text-slate-600 dark:bg-white/[0.06] dark:text-slate-300"><p className="font-semibold text-slate-900 dark:text-white">What we checked</p><ul className="mt-2 space-y-1"><li>- API request timeout/retry path</li><li>- Cached dashboard fallback</li><li>- Session token validity</li><li>- Configurable API base URL</li></ul>{error && <p className="mt-3 text-amber-600 dark:text-amber-300">Last response: {error}</p>}</div><div className="mt-5 flex flex-wrap gap-3"><Button variant="gradient" onClick={onRetry}>Retry connection</Button><Button variant="secondary" onClick={() => window.location.reload()}>Reload app</Button><Button variant="ghost" onClick={onSignOut}>Sign out</Button></div></div><div className="rounded-[1.5rem] border border-white/70 bg-slate-950 p-5 text-white dark:border-white/10"><p className="text-sm text-white/60">Deployment tip</p><p className="mt-3 text-2xl font-semibold tracking-[-0.04em]">Set VITE_API_BASE_URL when frontend and API deploy separately.</p><p className="mt-3 text-sm leading-6 text-white/60">For Vercel + Render/Railway, the frontend must know the hosted Express API URL. In local dev, Vite proxy still handles /api.</p></div></CardContent></Card>;
 }
 
 function EmptyState({ icon: Icon, title, description, action }: { icon: IconComponent; title: string; description: string; action?: React.ReactNode }) {

@@ -20,6 +20,16 @@ async function json<T>(response: Response): Promise<T> {
   return body as T;
 }
 
+test("health and readiness endpoints respond", async () => {
+  await withServer(async (baseUrl) => {
+    const health = await json<{ ok: boolean }>(await fetch(`${baseUrl}/api/health`));
+    const ready = await json<{ ready: boolean; checks: Record<string, unknown> }>(await fetch(`${baseUrl}/api/ready`));
+    assert.equal(health.ok, true);
+    assert.equal(ready.ready, true);
+    assert.equal(ready.checks.server, true);
+  });
+});
+
 test("auth, user-scoped dashboard, settings, job creation, and generation flow", async () => {
   await withServer(async (baseUrl) => {
     const email = `api-${Date.now()}@example.com`;
