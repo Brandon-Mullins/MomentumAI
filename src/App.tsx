@@ -210,6 +210,10 @@ async function request<T>(path: string, options: RequestInit & { retries?: numbe
         } catch {
           // Keep the status-based message when the response is not JSON.
         }
+        if (response.status === 401) {
+          localStorage.removeItem("momentumai-token");
+          throw new ApiError("Your session expired. Please sign in again.", { status: 401, retryable: false });
+        }
         throw new ApiError(message, { status: response.status, retryable: response.status >= 500 || response.status === 429 });
       }
 
@@ -429,6 +433,11 @@ function App() {
       await action();
       toast.success(success);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setNeedsAuth(true);
+        setDashboard(null);
+        setAuthUser(null);
+      }
       toast.error(error instanceof Error ? error.message : "Something went wrong");
     } finally {
       setIsBusy(false);
@@ -438,11 +447,23 @@ function App() {
   const updateStatus = async (job: JobPosting, status: ApplicationStatus) => {
     if (status === "Rejected" && !window.confirm(`Skip ${job.title} at ${job.company}? You can still find it in the tracker as Rejected.`)) return;
     await runAction(`${job.title} moved to ${status}.`, async () => {
-      await request<JobPosting>(`/api/jobs/${job.id}/status`, {
-        method: "PATCH",
-        body: JSON.stringify({ status })
-      });
-      await loadDashboard();
+      try {
+        await request<JobPosting>(`/api/jobs/${job.id}/status`, {
+          method: "PATCH",
+          body: JSON.stringify({ status })
+        });
+        await loadDashboard();
+      } catch (error) {
+        if ((localDemoMode || usingCachedDashboard || job.id.startsWith("local-demo-")) && dashboard) {
+          const updatedJobs = dashboard.jobs.map((candidate) => candidate.id === job.id ? { ...candidate, status } : candidate);
+          const updatedDashboard = { ...dashboard, jobs: updatedJobs, applications: updatedJobs.filter((candidate) => candidate.status !== "Pending") };
+          applyDashboard(updatedDashboard, { cached: true });
+          localStorage.setItem(dashboardCacheKey(), JSON.stringify({ data: updatedDashboard, cachedAt: new Date().toISOString() }));
+          toast.info("Updated this demo/cached job locally. Live sync will resume when the API reconnects.");
+          return;
+        }
+        throw error;
+      }
     });
   };
 
@@ -452,7 +473,7 @@ function App() {
       try {
         result = await request<GeneratedApplication>(`/api/jobs/${job.id}/generate`, { method: "POST" });
       } catch (error) {
-        if (!localDemoMode || !dashboard?.profile) throw error;
+        if (!(localDemoMode || usingCachedDashboard || job.id.startsWith("local-demo-")) || !dashboard?.profile) throw error;
         result = generateLocalApplication(dashboard.profile, job);
         toast.info("Using local demo packet generation because the API is unavailable.");
       }
