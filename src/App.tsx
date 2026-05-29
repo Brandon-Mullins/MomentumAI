@@ -33,6 +33,8 @@ import {
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast, Toaster } from "sonner";
+import { buildAnalytics, buildCareerCoachReport, buildInterviewSimulator, buildMissingSkillsMarketplace, generateApplication as generateLocalApplication, scoreJob } from "../shared/matching";
+import { defaultProfile, seedJobs } from "../shared/seedData";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card";
@@ -55,6 +57,65 @@ const navItems: Array<{ id: View; label: string; icon: IconComponent; helper: st
   { id: "tracker", label: "Pipeline", icon: ClipboardCheck, helper: "Applications", shortcut: "5" },
   { id: "coach", label: "Career coach", icon: Target, helper: "Skills + interviews", shortcut: "6" }
 ];
+
+function buildLocalDemoDashboard(): DashboardData {
+  const profile = {
+    ...defaultProfile,
+    name: "Jordan Demo",
+    email: "demo@momentumai.local",
+    location: "Detroit, MI",
+    preferredTitles: ["Automotive Validation Technician", "Test Engineer", "Quality Technician", "Engineering Technician"],
+    skills: ["manual testing", "test cases", "Jira", "diagnostics", "automotive", "root cause", "Python", "validation", "inspection", "CAN"]
+  };
+  const jobs = seedJobs.map((job, index) => ({
+    id: `local-demo-${index + 1}`,
+    createdAt: new Date(Date.now() - index * 1000 * 60 * 30).toISOString(),
+    status: index === 1 ? "Saved" as ApplicationStatus : "Pending" as ApplicationStatus,
+    notes: index === 0 ? { text: "Ask about test equipment, overtime, and training path.", updatedAt: new Date().toISOString() } : undefined,
+    ...scoreJob(profile, job)
+  }));
+  const averageMatch = Math.round(jobs.reduce((sum, job) => sum + job.matchScore, 0) / jobs.length);
+  return {
+    user: {
+      id: "local-demo",
+      name: "Jordan Demo",
+      email: "demo@momentumai.local",
+      createdAt: new Date().toISOString(),
+      settings: {
+        dailyAgentEnabled: true,
+        targetJobSources: ["Greenhouse", "Lever", "Workday", "Company careers page"],
+        emailDigest: true,
+        subscriptionTier: "Free",
+        analysesUsedThisMonth: 4,
+        analysisLimit: 25
+      }
+    },
+    settings: {
+      dailyAgentEnabled: true,
+      targetJobSources: ["Greenhouse", "Lever", "Workday", "Company careers page"],
+      emailDigest: true,
+      subscriptionTier: "Free",
+      analysesUsedThisMonth: 4,
+      analysisLimit: 25
+    },
+    profile,
+    jobs,
+    applications: jobs.filter((job) => job.status !== "Pending"),
+    analytics: buildAnalytics(jobs),
+    momentumScore: {
+      overall: 79,
+      resumeStrength: 82,
+      marketCompetitiveness: 74,
+      jobMatch: averageMatch,
+      interviewReadiness: 68,
+      nextActions: [
+        "Import one real job posting to replace demo data.",
+        "Close CAN, PPAP, or Minitab gaps for automotive validation roles.",
+        "Practice one interview simulator before applying to a strong match."
+      ]
+    }
+  };
+}
 
 const blankJob = {
   title: "",
@@ -184,6 +245,8 @@ function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [usingCachedDashboard, setUsingCachedDashboard] = useState(false);
+  const [localDemoMode, setLocalDemoMode] = useState(false);
+  const [onboardingProgress, setOnboardingProgress] = useState(() => Number(localStorage.getItem("momentumai-onboarding-progress") ?? "0"));
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("theme") as Theme) || "dark");
   const [showOnboarding, setShowOnboarding] = useState(() => localStorage.getItem("job-copilot-onboarded") !== "true");
 
@@ -287,17 +350,37 @@ function App() {
     localStorage.setItem("momentumai-token", response.token);
     setAuthUser(response.user);
     setNeedsAuth(false);
+    setLocalDemoMode(false);
     setIsLoading(true);
     loadDashboard().finally(() => setIsLoading(false));
   };
 
-  const continueDemo = () => handleAuthSuccess({ token: "demo-token", user: { id: "demo", name: "Demo Candidate", email: "demo@momentumai.local", createdAt: new Date().toISOString(), settings: { dailyAgentEnabled: true, targetJobSources: ["Greenhouse", "Lever", "Workday"], emailDigest: true, subscriptionTier: "Free", analysesUsedThisMonth: 0, analysisLimit: 25 } } });
+  const continueDemo = async () => {
+    localStorage.setItem("momentumai-token", "demo-token");
+    setNeedsAuth(false);
+    setIsLoading(true);
+    try {
+      await loadDashboard({ allowCache: false });
+      setLocalDemoMode(false);
+      toast.success("Demo workspace loaded with realistic automotive validation data.");
+    } catch {
+      const demo = buildLocalDemoDashboard();
+      applyDashboard(demo, { cached: true });
+      setAuthUser(demo.user ?? null);
+      setLocalDemoMode(true);
+      setWorkspaceError("Demo is running locally because the live API is not reachable. You can still explore the dashboard, job cards, packets, coach, and interview prep.");
+      toast.success("Local demo workspace loaded. No backend required.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const logout = async () => {
     await request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }).catch(() => undefined);
     localStorage.removeItem("momentumai-token");
     setDashboard(null);
     setAuthUser(null);
+    setLocalDemoMode(false);
     setNeedsAuth(true);
   };
 
@@ -361,7 +444,14 @@ function App() {
 
   const generateForJob = async (job: JobPosting) => {
     await runAction(`Generated application package for ${job.company}.`, async () => {
-      const result = await request<GeneratedApplication>(`/api/jobs/${job.id}/generate`, { method: "POST" });
+      let result: GeneratedApplication;
+      try {
+        result = await request<GeneratedApplication>(`/api/jobs/${job.id}/generate`, { method: "POST" });
+      } catch (error) {
+        if (!localDemoMode || !dashboard?.profile) throw error;
+        result = generateLocalApplication(dashboard.profile, job);
+        toast.info("Using local demo packet generation because the API is unavailable.");
+      }
       setActiveJob(job);
       setGenerated(result);
     });
@@ -402,8 +492,16 @@ function App() {
 
   const completeOnboarding = () => {
     localStorage.setItem("job-copilot-onboarded", "true");
+    localStorage.setItem("momentumai-onboarding-progress", "100");
+    setOnboardingProgress(100);
     setShowOnboarding(false);
     toast.success("Workspace ready. Start by reviewing matches or adding a job.");
+  };
+
+  const updateOnboardingProgress = (value: number) => {
+    const next = Math.max(onboardingProgress, value);
+    setOnboardingProgress(next);
+    localStorage.setItem("momentumai-onboarding-progress", String(next));
   };
 
   const handleResumeFile = async (file: File) => {
@@ -483,17 +581,19 @@ function App() {
                 transition={{ duration: 0.28, ease: "easeOut" }}
                 className="grid gap-4"
               >
+                {(localDemoMode || authToken() === "demo-token") && <DemoDataBanner local={localDemoMode} onImport={() => setView("search")} />}
+                {onboardingProgress < 100 && <OnboardingProgressCard progress={onboardingProgress} setView={setView} />}
                 <HeroPanel profile={dashboard.profile} pendingCount={pendingJobs.length} avgMatch={avgMatch} profileCompletion={profileCompletion} />
                 {dashboard.momentumScore && <MomentumScorePanel score={dashboard.momentumScore} />}
                 <AnalyticsGrid analytics={analytics} />
                 {dashboard.analytics && <IntelligenceAnalyticsPanel analytics={dashboard.analytics} jobs={jobs} />}
 
-                {view === "pending" && <JobBoard title="Pending review" description="Review each match before saving, skipping, tailoring documents, or applying. Nothing is submitted automatically." jobs={pendingJobs} empty="No pending jobs match your current search. Paste a job description from any source to create a new match." onStatus={updateStatus} onGenerate={generateForJob} onSaveNotes={saveJobNotes} onSaveScorecard={saveJobScorecard} isBusy={isBusy} />}
-                {view === "saved" && <JobBoard title="Saved roles" description="Your shortlist for deeper company research and resume tailoring." jobs={savedJobs} empty="No saved jobs yet. Save a strong match from the review queue." onStatus={updateStatus} onGenerate={generateForJob} onSaveNotes={saveJobNotes} onSaveScorecard={saveJobScorecard} isBusy={isBusy} />}
-                {view === "search" && <ManualJobIntake jobDraft={jobDraft} setJobDraft={setJobDraft} addManualJob={addManualJob} isBusy={isBusy} />}
-                {view === "profile" && <ProfileEditor profileDraft={profileDraft} setProfileDraft={setProfileDraft} titlesDraft={titlesDraft} setTitlesDraft={setTitlesDraft} skillsDraft={skillsDraft} setSkillsDraft={setSkillsDraft} saveProfile={saveProfile} isBusy={isBusy} completion={calculateProfileCompletion({ ...profileDraft, preferredTitles: splitLines(titlesDraft), skills: splitLines(skillsDraft) })} onResumeFile={handleResumeFile} resumeParseResult={resumeParseResult} />}
+                {view === "pending" && <JobBoard title="Pending review" description="Review each match before saving, skipping, tailoring documents, or applying. Nothing is submitted automatically." jobs={pendingJobs} empty="No pending jobs match your current search. Paste a job description from any source to create a new match." onStatus={updateStatus} onGenerate={generateForJob} onSaveNotes={saveJobNotes} onSaveScorecard={saveJobScorecard} isBusy={isBusy} emptyAction={<Button variant="gradient" onClick={() => setView("search")}>Import your first job</Button>} />}
+                {view === "saved" && <JobBoard title="Saved roles" description="Your shortlist for deeper company research and resume tailoring." jobs={savedJobs} empty="No saved jobs yet. Save a strong match from the review queue." onStatus={updateStatus} onGenerate={generateForJob} onSaveNotes={saveJobNotes} onSaveScorecard={saveJobScorecard} isBusy={isBusy} emptyAction={<Button variant="gradient" onClick={() => setView("pending")}>Review pending jobs</Button>} />}
+                {view === "search" && <ManualJobIntake jobDraft={jobDraft} setJobDraft={setJobDraft} addManualJob={async () => { await addManualJob(); updateOnboardingProgress(75); }} isBusy={isBusy} />}
+                {view === "profile" && <ProfileEditor profileDraft={profileDraft} setProfileDraft={setProfileDraft} titlesDraft={titlesDraft} setTitlesDraft={setTitlesDraft} skillsDraft={skillsDraft} setSkillsDraft={setSkillsDraft} saveProfile={async () => { await saveProfile(); updateOnboardingProgress(50); }} isBusy={isBusy} completion={calculateProfileCompletion({ ...profileDraft, preferredTitles: splitLines(titlesDraft), skills: splitLines(skillsDraft) })} onResumeFile={handleResumeFile} resumeParseResult={resumeParseResult} />}
                 {view === "tracker" && <ApplicationTracker jobs={trackerJobs} onGenerate={generateForJob} onStatus={updateStatus} progressPercent={progressPercent} />}
-                {view === "coach" && <CareerCoachPage jobs={jobs} />}
+                {view === "coach" && <CareerCoachPage jobs={jobs} profile={dashboard.profile} localDemoMode={localDemoMode} />}
               </motion.div>
             </AnimatePresence>
           )}
@@ -503,7 +603,7 @@ function App() {
       <CommandPalette open={commandOpen} setOpen={setCommandOpen} commandQuery={commandQuery} setCommandQuery={setCommandQuery} setView={setView} setTheme={setTheme} theme={theme} jobs={jobs} generateForJob={generateForJob} />
       <ApplicationDialog generated={generated} activeJob={activeJob} setGenerated={setGenerated} onApplied={(job) => updateStatus(job, "Applied")} />
       <SettingsDialog open={settingsOpen} setOpen={setSettingsOpen} user={authUser} onSave={saveSettings} isBusy={isBusy} />
-      <OnboardingDialog open={showOnboarding} onComplete={completeOnboarding} setView={setView} />
+      <OnboardingDialog open={showOnboarding && !localDemoMode} onComplete={completeOnboarding} setView={setView} setProgress={updateOnboardingProgress} />
     </div>
   );
 }
@@ -717,8 +817,8 @@ function MiniBar({ label, value, max, suffix = "" }: { label: string; value: num
   return <div><div className="flex justify-between text-xs font-semibold text-slate-500 dark:text-slate-400"><span className="capitalize">{label}</span><span>{value}{suffix}</span></div><div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10"><motion.div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500" initial={{ width: 0 }} animate={{ width: `${width}%` }} transition={{ duration: 0.55, ease: "easeOut" }} /></div></div>;
 }
 
-function JobBoard({ title, description, jobs, empty, onStatus, onGenerate, onSaveNotes, onSaveScorecard, isBusy }: { title: string; description: string; jobs: JobPosting[]; empty: string; onStatus: (job: JobPosting, status: ApplicationStatus) => void; onGenerate: (job: JobPosting) => void; onSaveNotes: (job: JobPosting, text: string) => void; onSaveScorecard: (job: JobPosting, scorecard: JobDecisionScorecard) => void; isBusy: boolean }) {
-  return <Card><CardHeader className="flex-col gap-3 md:flex-row md:items-end md:justify-between"><div><CardTitle className="text-2xl">{title}</CardTitle><CardDescription>{description}</CardDescription></div><Badge className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">{jobs.length} visible</Badge></CardHeader><CardContent>{jobs.length === 0 ? <EmptyState icon={Briefcase} title="Nothing here yet" description={empty} /> : <div className="grid gap-4 xl:grid-cols-2">{jobs.map((job, index) => <motion.div key={job.id} initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.04 }}><JobCard job={job} onStatus={onStatus} onGenerate={onGenerate} onSaveNotes={onSaveNotes} onSaveScorecard={onSaveScorecard} isBusy={isBusy} /></motion.div>)}</div>}</CardContent></Card>;
+function JobBoard({ title, description, jobs, empty, onStatus, onGenerate, onSaveNotes, onSaveScorecard, isBusy, emptyAction }: { title: string; description: string; jobs: JobPosting[]; empty: string; onStatus: (job: JobPosting, status: ApplicationStatus) => void; onGenerate: (job: JobPosting) => void; onSaveNotes: (job: JobPosting, text: string) => void; onSaveScorecard: (job: JobPosting, scorecard: JobDecisionScorecard) => void; isBusy: boolean; emptyAction?: React.ReactNode }) {
+  return <Card><CardHeader className="flex-col gap-3 md:flex-row md:items-end md:justify-between"><div><CardTitle className="text-2xl">{title}</CardTitle><CardDescription>{description}</CardDescription></div><Badge className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">{jobs.length} visible</Badge></CardHeader><CardContent>{jobs.length === 0 ? <EmptyState icon={Briefcase} title="Nothing here yet" description={empty} action={emptyAction} /> : <div className="grid gap-4 xl:grid-cols-2">{jobs.map((job, index) => <motion.div key={job.id} initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.04 }}><JobCard job={job} onStatus={onStatus} onGenerate={onGenerate} onSaveNotes={onSaveNotes} onSaveScorecard={onSaveScorecard} isBusy={isBusy} /></motion.div>)}</div>}</CardContent></Card>;
 }
 
 function JobCard({ job, onStatus, onGenerate, onSaveNotes, onSaveScorecard, isBusy }: { job: JobPosting; onStatus: (job: JobPosting, status: ApplicationStatus) => void; onGenerate: (job: JobPosting) => void; onSaveNotes: (job: JobPosting, text: string) => void; onSaveScorecard: (job: JobPosting, scorecard: JobDecisionScorecard) => void; isBusy: boolean }) {
@@ -802,7 +902,7 @@ function ApplicationTracker({ jobs, onGenerate, onStatus, progressPercent }: { j
   return <div className="grid gap-4"><Card><CardContent className="grid gap-6 p-6 lg:grid-cols-[1fr_360px]"><div><CardTitle className="text-2xl">Application pipeline</CardTitle><CardDescription>Move jobs from saved to applied, interview, offer, or rejected as your search progresses.</CardDescription><div className="mt-5"><ProgressLabel label="Pipeline progress" value={progressPercent} /></div></div><div className="flex items-end gap-2 rounded-[1.25rem] bg-slate-950/[0.04] p-4 dark:bg-white/[0.06]" aria-label="Application status chart">{statusCounts.map((item) => <div key={item.status} className="flex flex-1 flex-col items-center gap-2"><div className="flex h-28 w-full items-end rounded-full bg-white/70 p-1 dark:bg-slate-950/40"><motion.div className="w-full rounded-full bg-gradient-to-t from-indigo-500 to-fuchsia-400" initial={{ height: 0 }} animate={{ height: `${Math.max(8, (item.count / maxCount) * 100)}%` }} transition={{ duration: 0.7, ease: "easeOut" }} /></div><span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400">{item.status.slice(0, 3)}</span></div>)}</div></CardContent></Card><div className="grid gap-4 overflow-x-auto lg:grid-cols-5">{statusCounts.map(({ status }) => <Card key={status} className="min-h-[260px] min-w-[220px]"><CardHeader className="p-4"><CardTitle className="text-base">{status}</CardTitle></CardHeader><CardContent className="space-y-3 p-4 pt-0">{jobs.filter((job) => job.status === status).length === 0 && <p className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-400 dark:border-white/10">No roles yet.</p>}{jobs.filter((job) => job.status === status).map((job) => <div key={job.id} className="rounded-2xl bg-slate-950/[0.04] p-3 transition hover:-translate-y-0.5 dark:bg-white/[0.06]"><p className="font-semibold text-slate-900 dark:text-white">{job.title}</p><p className="text-sm text-slate-500 dark:text-slate-400">{job.company}</p><div className="mt-3 flex gap-2"><Button variant="secondary" size="sm" onClick={() => onGenerate(job)}>Docs</Button>{status !== "Interview" && <Button variant="ghost" size="sm" onClick={() => onStatus(job, "Interview")}>Interview</Button>}</div></div>)}</CardContent></Card>)}</div></div>;
 }
 
-function CareerCoachPage({ jobs }: { jobs: JobPosting[] }) {
+function CareerCoachPage({ jobs, profile, localDemoMode }: { jobs: JobPosting[]; profile: UserProfile; localDemoMode: boolean }) {
   const [report, setReport] = useState<CareerCoachReport | null>(null);
   const [selectedJobId, setSelectedJobId] = useState(jobs[0]?.id ?? "");
   const [marketplace, setMarketplace] = useState<MissingSkillsMarketplace | null>(null);
@@ -811,7 +911,10 @@ function CareerCoachPage({ jobs }: { jobs: JobPosting[] }) {
   const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? jobs[0];
 
   useEffect(() => {
-    request<CareerCoachReport>("/api/career/coach").then(setReport).catch(() => toast.error("Could not load career coach report."));
+    request<CareerCoachReport>("/api/career/coach").then(setReport).catch(() => {
+      if (localDemoMode) setReport(buildCareerCoachReport(profile, jobs));
+      else toast.error("Could not load career coach report.");
+    });
   }, []);
 
   useEffect(() => {
@@ -823,10 +926,18 @@ function CareerCoachPage({ jobs }: { jobs: JobPosting[] }) {
     if (!selectedJob) return;
     setLoading(true);
     try {
-      const [skills, interview] = await Promise.all([
-        request<MissingSkillsMarketplace>(`/api/jobs/${selectedJob.id}/skills-marketplace`),
-        request<InterviewSimulator>(`/api/jobs/${selectedJob.id}/interview`, { method: "POST" })
-      ]);
+      let skills: MissingSkillsMarketplace;
+      let interview: InterviewSimulator;
+      try {
+        [skills, interview] = await Promise.all([
+          request<MissingSkillsMarketplace>(`/api/jobs/${selectedJob.id}/skills-marketplace`),
+          request<InterviewSimulator>(`/api/jobs/${selectedJob.id}/interview`, { method: "POST" })
+        ]);
+      } catch (error) {
+        if (!localDemoMode) throw error;
+        skills = buildMissingSkillsMarketplace(profile, selectedJob);
+        interview = buildInterviewSimulator(profile, selectedJob);
+      }
       setMarketplace(skills);
       setSimulator(interview);
       toast.success(`Career coach loaded for ${selectedJob.company}.`);
@@ -891,15 +1002,15 @@ function ApplicationDialog({ generated, activeJob, setGenerated, onApplied }: { 
   return <Dialog open={Boolean(generated && activeJob)} onOpenChange={(open) => !open && setGenerated(null)}><DialogContent>{generated && activeJob && activeDoc && <div className="max-h-[90vh] overflow-y-auto p-6 md:p-8"><DialogHeader className="pr-10"><Badge className="w-fit bg-amber-500/10 text-amber-600 dark:text-amber-300">Manual review required</Badge><DialogTitle>Application packet for {activeJob.company}</DialogTitle><DialogDescription>Generated content is based only on your saved profile and this job description. Review for accuracy before submitting anywhere.</DialogDescription></DialogHeader><div className="mt-5 flex gap-2 overflow-x-auto pb-2">{docs.map((doc) => <button key={doc.id} onClick={() => setTab(doc.id)} className={`shrink-0 rounded-full px-3 py-2 text-sm font-semibold transition ${activeDoc.id === doc.id ? "bg-slate-950 text-white dark:bg-white dark:text-slate-950" : "bg-slate-950/5 text-slate-500 hover:bg-slate-950/10 dark:bg-white/10 dark:text-slate-300 dark:hover:bg-white/15"}`}>{doc.label}</button>)}</div><div className="mt-4"><DocumentBox title={activeDoc.title} value={activeDoc.value} onCopy={() => copy(activeDoc.value, activeDoc.title)} onExport={() => exportPdf(`${activeJob.company} ${activeDoc.title}`, activeDoc.value)} /></div><div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-400/20 dark:bg-amber-400/10"><p className="font-semibold text-amber-900 dark:text-amber-100">Safety and accuracy checklist</p><ul className="mt-2 space-y-2 text-sm text-amber-800 dark:text-amber-100/80">{generated.checklist.map((item) => <li key={item} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />{item}</li>)}</ul></div><div className="mt-6 flex flex-wrap justify-end gap-3"><Button variant="secondary" onClick={() => setGenerated(null)}>Keep reviewing</Button><Button variant="gradient" onClick={() => onApplied(activeJob)}><CheckCircle2 className="h-4 w-4" /> I submitted it, mark applied</Button></div></div>}</DialogContent></Dialog>;
 }
 
-function OnboardingDialog({ open, onComplete, setView }: { open: boolean; onComplete: () => void; setView: (view: View) => void }) {
+function OnboardingDialog({ open, onComplete, setView, setProgress }: { open: boolean; onComplete: () => void; setView: (view: View) => void; setProgress: (progress: number) => void }) {
   const steps = [
-    { icon: UploadCloud, title: "Upload or paste resume", text: "Parse your resume into skills, tools, experience, education, and profile strength.", view: "profile" as View },
-    { icon: Target, title: "Choose target roles", text: "Pick test engineer, technician, quality, validation, or automotive testing paths.", view: "profile" as View },
-    { icon: CircleDollarSign, title: "Set salary and location", text: "Tell MomentumAI your pay range, commute limits, and remote/hybrid preferences.", view: "profile" as View },
-    { icon: Search, title: "Add your first job", text: "Paste a job posting or use the browser extension to capture one from anywhere.", view: "search" as View },
-    { icon: Gauge, title: "Generate Momentum Score™", text: "See resume strength, market competitiveness, job match, and interview readiness.", view: "pending" as View }
+    { icon: UploadCloud, title: "Upload or paste resume", text: "Parse your resume into skills, tools, experience, education, and profile strength.", view: "profile" as View, progress: 25 },
+    { icon: Target, title: "Choose target roles", text: "Pick test engineer, technician, quality, validation, or automotive testing paths.", view: "profile" as View, progress: 50 },
+    { icon: CircleDollarSign, title: "Set salary and location", text: "Tell MomentumAI your pay range, commute limits, and remote/hybrid preferences.", view: "profile" as View, progress: 50 },
+    { icon: Search, title: "Add your first job", text: "Paste a job posting or use the browser extension to capture one from anywhere.", view: "search" as View, progress: 75 },
+    { icon: Gauge, title: "Generate Momentum Score™", text: "See resume strength, market competitiveness, job match, and interview readiness.", view: "pending" as View, progress: 100 }
   ];
-  return <Dialog open={open} onOpenChange={(next) => !next && onComplete()}><DialogContent className="max-w-5xl"><div className="p-6 md:p-8"><DialogHeader><Badge className="w-fit bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">New user onboarding</Badge><DialogTitle className="text-3xl">Create your first career intelligence loop.</DialogTitle><DialogDescription>Follow these steps to turn MomentumAI from an empty workspace into a daily job-search assistant.</DialogDescription></DialogHeader><div className="mt-6 grid gap-3 md:grid-cols-5">{steps.map((item, index) => { const Icon = item.icon; return <button key={item.title} onClick={() => { setView(item.view); onComplete(); }} className="rounded-2xl bg-slate-950/[0.04] p-4 text-left transition hover:-translate-y-1 hover:bg-indigo-500/10 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:bg-white/[0.06]"><div className="flex items-center justify-between"><Icon className="h-6 w-6 text-indigo-500" /><span className="text-xs font-bold text-slate-400">0{index + 1}</span></div><p className="mt-3 font-semibold">{item.title}</p><p className="mt-1 text-sm leading-5 text-slate-500 dark:text-slate-400">{item.text}</p></button>; })}</div><div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100"><strong>Conversion goal:</strong> upload resume + import one real job = first Momentum Score and first application packet.</div><div className="mt-6 flex flex-wrap justify-end gap-3"><Button variant="secondary" onClick={() => { setView("search"); onComplete(); }}>Add first job</Button><Button variant="gradient" onClick={() => { setView("profile"); onComplete(); }}>Start with resume <ArrowRight className="h-4 w-4" /></Button></div></div></DialogContent></Dialog>;
+  return <Dialog open={open} onOpenChange={(next) => !next && onComplete()}><DialogContent className="max-h-[92vh] max-w-5xl overflow-y-auto"><div className="p-5 md:p-8"><DialogHeader><Badge className="w-fit bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">New user onboarding</Badge><DialogTitle className="text-3xl">Create your first career intelligence loop.</DialogTitle><DialogDescription>Follow these steps to turn MomentumAI from an empty workspace into a daily job-search assistant.</DialogDescription></DialogHeader><div className="mt-6 grid gap-3 md:grid-cols-5">{steps.map((item, index) => { const Icon = item.icon; return <button key={item.title} onClick={() => { setView(item.view); setProgress(item.progress); onComplete(); }} className="rounded-2xl bg-slate-950/[0.04] p-4 text-left transition hover:-translate-y-1 hover:bg-indigo-500/10 focus:outline-none focus:ring-2 focus:ring-indigo-400 dark:bg-white/[0.06]"><div className="flex items-center justify-between"><Icon className="h-6 w-6 text-indigo-500" /><span className="text-xs font-bold text-slate-400">0{index + 1}</span></div><p className="mt-3 font-semibold">{item.title}</p><p className="mt-1 text-sm leading-5 text-slate-500 dark:text-slate-400">{item.text}</p></button>; })}</div><div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-400/20 dark:bg-amber-400/10 dark:text-amber-100"><strong>Trust reminder:</strong> MomentumAI does not auto-apply, does not invent experience, and keeps generated documents under your review.</div><div className="mt-6 flex flex-wrap justify-end gap-3"><Button variant="secondary" onClick={() => { setView("search"); setProgress(75); onComplete(); }}>Add first job</Button><Button variant="gradient" onClick={() => { setView("profile"); setProgress(25); onComplete(); }}>Start with resume <ArrowRight className="h-4 w-4" /></Button></div></div></DialogContent></Dialog>;
 }
 function DocumentBox({ title, value, onCopy, onExport }: { title: string; value: string; onCopy: () => void; onExport: () => void }) {
   return <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.04]"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">{title}</h3><div className="flex gap-2"><Button variant="secondary" size="sm" onClick={onCopy}>Copy</Button><Button variant="secondary" size="sm" onClick={onExport}><Download className="h-4 w-4" /> PDF</Button></div></div><div className="mt-3 overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-white/10 dark:bg-slate-950/50"><Textarea value={value} readOnly rows={18} className="border-0 bg-transparent font-mono text-xs leading-5 shadow-none" /></div></div>;
@@ -921,6 +1032,20 @@ function MetricTile({ value, label }: { value: number; label: string }) {
 
 function InfoPill({ icon: Icon, text }: { icon: IconComponent; text: string }) {
   return <div className="flex min-w-0 items-center gap-2 rounded-2xl bg-slate-950/[0.04] px-3 py-2 dark:bg-white/[0.06]"><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{text}</span></div>;
+}
+
+function DemoDataBanner({ local, onImport }: { local: boolean; onImport: () => void }) {
+  return <Card className="border-cyan-300/30 bg-cyan-50/90 dark:border-cyan-400/20 dark:bg-cyan-400/10"><CardContent className="flex flex-col gap-3 p-4 text-cyan-950 dark:text-cyan-100 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-3"><Sparkles className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="font-semibold">This is demo data</p><p className="text-sm leading-6 opacity-80">Explore realistic automotive validation jobs, application packets, career coach, and interview prep. {local ? "This demo is running locally without the API." : "Live demo API is connected."}</p></div></div><Button variant="secondary" onClick={onImport}>Import your own job</Button></CardContent></Card>;
+}
+
+function OnboardingProgressCard({ progress, setView }: { progress: number; setView: (view: View) => void }) {
+  const steps = [
+    { label: "Profile", view: "profile" as View, threshold: 25 },
+    { label: "Target roles", view: "profile" as View, threshold: 50 },
+    { label: "First job", view: "search" as View, threshold: 75 },
+    { label: "Momentum Score", view: "pending" as View, threshold: 100 }
+  ];
+  return <Card className="border-indigo-200/70 bg-white/85 dark:border-white/10 dark:bg-white/[0.06]"><CardContent className="p-4"><div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><div><p className="font-semibold text-slate-950 dark:text-white">First workspace setup</p><p className="text-sm text-slate-500 dark:text-slate-400">Complete these steps to get your first Momentum Score and application packet.</p></div><Badge className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-300">{progress}% complete</Badge></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-white/10"><motion.div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500" animate={{ width: `${progress}%` }} /></div><div className="mt-4 grid gap-2 sm:grid-cols-4">{steps.map((step) => <button key={step.label} onClick={() => setView(step.view)} className="rounded-2xl bg-slate-950/[0.04] p-3 text-left text-sm transition hover:bg-indigo-500/10 dark:bg-white/[0.06]"><span className={progress >= step.threshold ? "text-emerald-500" : "text-slate-400"}>{progress >= step.threshold ? "✓" : "○"}</span><span className="ml-2 font-semibold">{step.label}</span></button>)}</div></CardContent></Card>;
 }
 
 function ServiceStatusBanner({ message, cached, onRetry }: { message: string; cached: boolean; onRetry: () => void }) {

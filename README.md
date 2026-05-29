@@ -106,6 +106,7 @@ The in-memory auth fallback is for local development. Production should use Supa
 - Deployment guide: `docs/DEPLOYMENT.md`
 - API guide: `docs/API.md`
 - Architecture overview: `docs/ARCHITECTURE.md`
+- First-time user launch QA: `docs/LAUNCH_QA.md`
 - Supabase migration: `supabase/migrations/20260529022100_initial_saas_schema.sql`
 
 Run verification before deployment:
