@@ -100,3 +100,19 @@ Local demo credentials:
 - Password: `demo1234`
 
 The in-memory auth fallback is for local development. Production should use Supabase Auth, hosted secrets, email delivery, and server-side subscription webhooks.
+
+## Production readiness
+
+- Deployment guide: `docs/DEPLOYMENT.md`
+- API guide: `docs/API.md`
+- Architecture overview: `docs/ARCHITECTURE.md`
+- Supabase migration: `supabase/migrations/20260529022100_initial_saas_schema.sql`
+
+Run verification before deployment:
+
+```bash
+npm test
+npm run build
+```
+
+Known limitations are documented in `docs/ARCHITECTURE.md`.

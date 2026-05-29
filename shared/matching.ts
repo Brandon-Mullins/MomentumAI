@@ -137,11 +137,12 @@ function recommendation(score: number, redFlags: string[]): Recommendation {
 }
 
 export function parseResumeText(rawText: string): ResumeParseResult {
-  const text = rawText.replace(/\u0000/g, " ").replace(/[ \t]+/g, " ").trim();
+  const text = rawText.replace(/\\n/g, "\n").replace(/\u0000/g, " ").replace(/[ \t]+/g, " ").trim();
   const textLines = lines(text);
   const email = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? "";
   const phone = text.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/)?.[0] ?? "";
-  const name = textLines.find((line) => line.length < 60 && !line.includes("@") && !/resume|summary|experience/i.test(line)) ?? "";
+  const explicitName = text.match(/(?:^|\n)\s*name\s*[:|-]\s*([^\n]+)/i)?.[1]?.trim();
+  const name = explicitName || textLines.find((line) => line.length < 60 && !line.includes("@") && !/resume|summary|experience|technician|engineer|testing|validation|quality/i.test(line)) || textLines[0]?.split(/\s{2,}|\|/)[0]?.trim() || "";
   const lower = normalize(text);
   const skills = unique(SKILL_KEYWORDS.filter((skill) => lower.includes(skill))).slice(0, 18);
   const toolsTechnologies = unique(TOOL_KEYWORDS.filter((tool) => lower.includes(tool))).slice(0, 12);

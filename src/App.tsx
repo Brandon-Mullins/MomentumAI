@@ -267,6 +267,7 @@ function App() {
   };
 
   const updateStatus = async (job: JobPosting, status: ApplicationStatus) => {
+    if (status === "Rejected" && !window.confirm(`Skip ${job.title} at ${job.company}? You can still find it in the tracker as Rejected.`)) return;
     await runAction(`${job.title} moved to ${status}.`, async () => {
       await request<JobPosting>(`/api/jobs/${job.id}/status`, {
         method: "PATCH",

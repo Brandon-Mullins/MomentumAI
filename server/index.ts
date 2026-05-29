@@ -34,9 +34,24 @@ dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
+const requestBodyLimit = process.env.REQUEST_BODY_LIMIT ?? "5mb";
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "").split(",").map((origin) => origin.trim()).filter(Boolean);
+const allowDemoAuth = process.env.ALLOW_DEMO_AUTH !== "false";
 
-app.use(cors());
-app.use(express.json({ limit: "15mb" }));
+app.disable("x-powered-by");
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  next();
+});
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || process.env.NODE_ENV !== "production" || allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error("Origin not allowed by CORS"));
+  }
+}));
+app.use(express.json({ limit: requestBodyLimit }));
 
 const supabase =
   process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -75,6 +90,7 @@ const users = new Map<string, DemoUser>();
 const sessions = new Map<string, string>();
 const resetTokens = new Map<string, string>();
 const workspaces = new Map<string, WorkspaceData>();
+const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
 
 function hashPassword(password: string, salt = randomBytes(16).toString("hex")) {
   return { salt, passwordHash: scryptSync(password, salt, 64).toString("hex") };
@@ -84,6 +100,54 @@ function verifyPassword(password: string, salt: string, expectedHash: string) {
   const actual = Buffer.from(scryptSync(password, salt, 64).toString("hex"), "hex");
   const expected = Buffer.from(expectedHash, "hex");
   return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function sanitizeText(value = "", maxLength = 25000) {
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function sanitizeUrl(value?: string) {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol)) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function rateLimit(options: { windowMs: number; max: number; scope: string }) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const key = `${options.scope}:${req.ip ?? "unknown"}:${(req as RequestWithUser).userId ?? "anon"}`;
+    const now = Date.now();
+    const bucket = rateLimitBuckets.get(key);
+    if (!bucket || bucket.resetAt <= now) {
+      rateLimitBuckets.set(key, { count: 1, resetAt: now + options.windowMs });
+      return next();
+    }
+    if (bucket.count >= options.max) {
+      return res.status(429).json({ error: "Rate limit exceeded", retryAfterSeconds: Math.ceil((bucket.resetAt - now) / 1000) });
+    }
+    bucket.count += 1;
+    next();
+  };
+}
+
+function enforceAnalysisLimit(req: RequestWithUser, res: express.Response, next: express.NextFunction) {
+  const user = currentUser(req);
+  if (user.settings.subscriptionTier === "Free" && user.settings.analysesUsedThisMonth >= user.settings.analysisLimit) {
+    return res.status(402).json({ error: "Monthly analysis limit reached", upgradeRequired: true, limit: user.settings.analysisLimit });
+  }
+  user.settings.analysesUsedThisMonth += 1;
+  next();
 }
 
 function publicUser(user: DemoUser) {
@@ -138,14 +202,20 @@ function issueSession(userId: string) {
   return token;
 }
 
-function authMiddleware(req: RequestWithUser, _res: express.Response, next: express.NextFunction) {
+function authMiddleware(req: RequestWithUser, res: express.Response, next: express.NextFunction) {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+  if (token && !sessions.has(token)) return res.status(401).json({ error: "Invalid or expired session" });
+  if (!token && !allowDemoAuth && !req.path.startsWith("/api/auth/") && req.path !== "/api/health") {
+    return res.status(401).json({ error: "Authentication required" });
+  }
   req.userId = token && sessions.has(token) ? sessions.get(token) : demoUser.id;
   next();
 }
 
+app.use("/api/auth", rateLimit({ windowMs: 15 * 60 * 1000, max: 20, scope: "auth" }));
 app.use(authMiddleware);
+app.use(["/api/resume/parse", "/api/jobs/import", "/api/jobs/score", /\/api\/jobs\/[^/]+\/(generate|packet|interview|skills-marketplace)$/], rateLimit({ windowMs: 15 * 60 * 1000, max: 80, scope: "analysis" }));
 
 function currentUser(req: RequestWithUser) {
   return users.get(req.userId ?? demoUser.id) ?? demoUser;
@@ -191,12 +261,12 @@ const profileSchema = z.object({
 });
 
 const jobSchema = z.object({
-  title: z.string().min(1),
-  company: z.string().min(1),
-  location: z.string().min(1),
-  source: z.string().min(1),
-  pay: z.string().optional(),
-  description: z.string().min(20),
+  title: z.string().min(1).max(160).transform((value) => sanitizeText(value, 160)),
+  company: z.string().min(1).max(160).transform((value) => sanitizeText(value, 160)),
+  location: z.string().min(1).max(160).transform((value) => sanitizeText(value, 160)),
+  source: z.string().min(1).max(160).transform((value) => sanitizeText(value, 160)),
+  pay: z.string().max(120).optional().transform((value) => value ? sanitizeText(value, 120) : value),
+  description: z.string().min(20).max(25000).transform((value) => sanitizeText(value, 25000)),
   preferredSkills: z.array(z.string()).optional(),
   yearsExperience: z.string().optional(),
   employmentType: z.string().optional(),
@@ -204,9 +274,9 @@ const jobSchema = z.object({
 });
 
 const statusSchema = z.object({ status: z.enum(["Pending", "Saved", "Applied", "Interview", "Rejected", "Offer"]) });
-const resumeUploadSchema = z.object({ filename: z.string().default("resume.txt"), mimeType: z.string().default("text/plain"), contentBase64: z.string().optional(), text: z.string().optional() });
-const importSchema = z.object({ text: z.string().optional(), url: z.string().optional(), recruiterEmail: z.string().optional(), source: z.string().optional() });
-const notesSchema = z.object({ text: z.string().max(5000).default("") });
+const resumeUploadSchema = z.object({ filename: z.string().max(240).default("resume.txt").transform((value) => sanitizeText(value, 240)), mimeType: z.string().max(120).default("text/plain"), contentBase64: z.string().max(8_000_000).optional(), text: z.string().max(25000).optional().transform((value) => value ? sanitizeText(value, 25000) : value) });
+const importSchema = z.object({ text: z.string().max(25000).optional().transform((value) => value ? sanitizeText(value, 25000) : value), url: z.string().optional().transform((value) => sanitizeUrl(value)), recruiterEmail: z.string().max(10000).optional().transform((value) => value ? sanitizeText(value, 10000) : value), source: z.string().max(160).optional().transform((value) => value ? sanitizeText(value, 160) : value) });
+const notesSchema = z.object({ text: z.string().max(5000).default("").transform((value) => sanitizeText(value, 5000)) });
 const authSchema = z.object({ name: z.string().min(1).optional(), email: z.string().email(), password: z.string().min(8) });
 const resetSchema = z.object({ email: z.string().email() });
 const settingsSchema = z.object({
@@ -356,7 +426,7 @@ app.put("/api/profile", async (req: RequestWithUser, res) => {
   res.json(workspace.profile);
 });
 
-app.post("/api/resume/parse", async (req, res) => {
+app.post("/api/resume/parse", enforceAnalysisLimit, async (req, res) => {
   const parsed = resumeUploadSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   try {
@@ -368,7 +438,7 @@ app.post("/api/resume/parse", async (req, res) => {
   }
 });
 
-app.post("/api/jobs/import", async (req, res) => {
+app.post("/api/jobs/import", enforceAnalysisLimit, async (req, res) => {
   const parsed = importSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const hasContent = [parsed.data.text, parsed.data.url, parsed.data.recruiterEmail].some((value) => value?.trim());
@@ -382,7 +452,7 @@ app.post("/api/jobs/import", async (req, res) => {
       else {
         const contentType = response.headers.get("content-type") ?? "";
         const body = await response.text();
-        const extractedText = contentType.includes("json") ? JSON.stringify(JSON.parse(body), null, 2) : htmlToJobText(body);
+        const extractedText = sanitizeText(contentType.includes("json") ? JSON.stringify(JSON.parse(body), null, 2) : htmlToJobText(body), 25000);
         importPayload = { ...parsed.data, text: extractedText.slice(0, 25000) };
         extractionNotes.push("Fetched the URL server-side and extracted readable posting text.");
       }
@@ -405,7 +475,7 @@ app.post("/api/jobs/manual", async (req: RequestWithUser, res) => {
   res.status(201).json(job);
 });
 
-app.post("/api/jobs/score", (req: RequestWithUser, res) => {
+app.post("/api/jobs/score", enforceAnalysisLimit, (req: RequestWithUser, res) => {
   const parsed = jobSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.json(scoreJob(currentWorkspace(req).profile, parsed.data));
@@ -452,14 +522,14 @@ app.post("/api/jobs/:id/scorecard", (req: RequestWithUser, res) => {
   res.json(buildDecisionScorecard(workspace.profile, job, job.matchScore, job.scoreBreakdown, job.redFlags));
 });
 
-app.post("/api/jobs/:id/generate", (req: RequestWithUser, res) => {
+app.post("/api/jobs/:id/generate", enforceAnalysisLimit, (req: RequestWithUser, res) => {
   const workspace = currentWorkspace(req);
   const job = findJob(workspace, String(req.params.id));
   if (!job) return res.status(404).json({ error: "Job not found" });
   res.json(generateApplication(workspace.profile, job));
 });
 
-app.post("/api/jobs/:id/packet", (req: RequestWithUser, res) => {
+app.post("/api/jobs/:id/packet", enforceAnalysisLimit, (req: RequestWithUser, res) => {
   const workspace = currentWorkspace(req);
   const job = findJob(workspace, String(req.params.id));
   if (!job) return res.status(404).json({ error: "Job not found" });
@@ -471,18 +541,27 @@ app.get("/api/career/coach", (req: RequestWithUser, res) => {
   res.json(buildCareerCoachReport(workspace.profile, workspace.jobs));
 });
 
-app.post("/api/jobs/:id/interview", (req: RequestWithUser, res) => {
+app.post("/api/jobs/:id/interview", enforceAnalysisLimit, (req: RequestWithUser, res) => {
   const workspace = currentWorkspace(req);
   const job = findJob(workspace, String(req.params.id));
   if (!job) return res.status(404).json({ error: "Job not found" });
   res.json(buildInterviewSimulator(workspace.profile, job));
 });
 
-app.get("/api/jobs/:id/skills-marketplace", (req: RequestWithUser, res) => {
+app.get("/api/jobs/:id/skills-marketplace", enforceAnalysisLimit, (req: RequestWithUser, res) => {
   const workspace = currentWorkspace(req);
   const job = findJob(workspace, String(req.params.id));
   if (!job) return res.status(404).json({ error: "Job not found" });
   res.json(buildMissingSkillsMarketplace(workspace.profile, job));
 });
 
-app.listen(port, () => console.log(`MomentumAI job copilot API running on http://localhost:${port}`));
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error(err);
+  res.status(500).json({ error: "Internal server error" });
+});
+
+if (process.env.NODE_ENV !== "test") {
+  app.listen(port, () => console.log(`MomentumAI job copilot API running on http://localhost:${port}`));
+}
+
+export { app, buildMomentumScore };
