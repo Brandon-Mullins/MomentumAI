@@ -9,7 +9,7 @@ import {
   parseResumeText,
   scoreJob
 } from "../shared/matching";
-import { buildResumeStudio, escapeLatex } from "../shared/resumeStudio";
+import { buildResumeStudio, escapeLatex, getResumeStudioExportOptions } from "../shared/resumeStudio";
 import { defaultProfile } from "../shared/seedData";
 import { buildMomentumScore } from "../server/index";
 import type { JobPosting } from "../shared/types";
@@ -121,7 +121,7 @@ test("buildResumeStudio creates professional editable resume assets", () => {
   };
   const generated = generateApplication(defaultProfile, job);
   const studio = buildResumeStudio(defaultProfile, job, generated, {
-    template: "Automotive Test Engineer",
+    template: "Automotive/Test Engineer",
     coverLetterStyle: "Automotive",
     pageLength: "one-page"
   });
@@ -162,4 +162,41 @@ test("email intelligence classifies recruiter activity and builds timeline", () 
   assert.equal(timeline[0].suggestedStatus, "Interview");
   assert.equal(summary.interviewRequests, 1);
   assert.ok(followUps[0].message.includes(defaultProfile.name));
+});
+
+
+test("resume studio export options separate rendered PDF from TEX source", () => {
+  const options = getResumeStudioExportOptions();
+  const pdf = options.find((option) => option.kind === "pdf");
+  const tex = options.find((option) => option.kind === "tex");
+  assert.equal(pdf?.label, "Download PDF");
+  assert.equal(pdf?.filename, "resume.pdf");
+  assert.equal(tex?.label, "Download .tex");
+  assert.ok(tex?.filename.includes("resume.tex"));
+});
+
+test("resume studio templates generate distinct professional LaTeX", () => {
+  const job: JobPosting = {
+    id: "job-4",
+    createdAt: new Date().toISOString(),
+    status: "Pending",
+    ...scoreJob(defaultProfile, {
+      title: "Engineering Technician",
+      company: "Bosch",
+      location: "Plymouth, MI",
+      source: "Unit test",
+      description: "Engineering technician role requiring Jira, diagnostics, test cases, CAN, tools, and documentation."
+    })
+  };
+  const generated = generateApplication(defaultProfile, job);
+  const modern = buildResumeStudio(defaultProfile, job, generated, { template: "Modern Compact", coverLetterStyle: "Professional", pageLength: "one-page" });
+  const auto = buildResumeStudio(defaultProfile, job, generated, { template: "Automotive/Test Engineer", coverLetterStyle: "Automotive", pageLength: "one-page" });
+
+  assert.notEqual(modern.resumeTex, auto.resumeTex);
+  assert.ok(modern.resumeTex.includes("\\usepackage{titlesec}"));
+  assert.ok(modern.resumeTex.includes("Professional Summary"));
+  assert.ok(modern.resumeTex.includes("Core Skills"));
+  assert.ok(modern.resumeTex.includes("Experience Highlights"));
+  assert.ok(modern.resumeTex.includes("Tools \\& Projects"));
+  assert.ok(modern.resumeTex.includes("Education \\& Certifications"));
 });

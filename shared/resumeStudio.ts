@@ -1,21 +1,9 @@
 import type { GeneratedApplication, JobPosting, UserProfile } from "./types";
 
-export type ResumeTemplate =
-  | "Automotive Test Engineer"
-  | "Validation Engineer"
-  | "Engineering Technician"
-  | "Quality Engineer"
-  | "ATS Optimized"
-  | "Executive Professional";
-
-export type CoverLetterStudioStyle =
-  | "Professional"
-  | "Technical"
-  | "Executive"
-  | "Automotive"
-  | "Concise";
-
+export type ResumeTemplate = "Modern Compact" | "ATS Clean" | "Engineering Professional" | "Automotive/Test Engineer";
+export type CoverLetterStudioStyle = "Professional" | "Technical" | "Executive" | "Automotive" | "Concise";
 export type ResumePageLength = "one-page" | "two-page";
+export type ResumeExportKind = "pdf" | "docx" | "tex" | "zip";
 
 export interface ResumeStudioOptions {
   template: ResumeTemplate;
@@ -41,10 +29,28 @@ export interface ResumeStudioOutput {
   includedSections: Array<{ section: string; why: string }>;
   bulletSuggestions: string[];
   warnings: string[];
+  projectsOrTools: string[];
+  education: string[];
+}
+
+export interface ResumeExportOption {
+  kind: ResumeExportKind;
+  label: string;
+  filename: string;
+  description: string;
 }
 
 const clamp = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
 const normalize = (value = "") => value.toLowerCase();
+
+export function getResumeStudioExportOptions(): ResumeExportOption[] {
+  return [
+    { kind: "pdf", label: "Download PDF", filename: "resume.pdf", description: "Rendered resume PDF from the styled preview, not LaTeX source." },
+    { kind: "docx", label: "Download DOCX", filename: "resume.docx", description: "Word-editable resume document." },
+    { kind: "tex", label: "Download .tex", filename: "resume.tex + coverletter.tex", description: "Overleaf-ready LaTeX source files." },
+    { kind: "zip", label: "Download ZIP", filename: "application-package.zip", description: "Resume, cover letter, LaTeX files, and README instructions." }
+  ];
+}
 
 export function escapeLatex(value = "") {
   return value
@@ -68,23 +74,19 @@ function selectRelevantSkills(profile: UserProfile, job: JobPosting) {
   const jobText = normalize(`${job.title} ${job.description} ${job.requiredSkills.join(" ")}`);
   const skills = unique([...(profile.skills ?? []), ...(profile.parsedResume?.skills ?? []), ...(profile.parsedResume?.toolsTechnologies ?? [])]);
   const matched = skills.filter((skill) => jobText.includes(normalize(skill)));
-  return unique([...matched, ...skills]).slice(0, 14);
+  return unique([...matched, ...skills]).slice(0, 16);
 }
 
 function templateSummaryPrefix(template: ResumeTemplate) {
   switch (template) {
-    case "Automotive Test Engineer":
-      return "Automotive test and validation candidate";
-    case "Validation Engineer":
-      return "Validation-focused engineering candidate";
-    case "Engineering Technician":
-      return "Hands-on engineering technician";
-    case "Quality Engineer":
-      return "Quality and continuous-improvement candidate";
-    case "Executive Professional":
-      return "Technical leader and quality-focused professional";
+    case "Automotive/Test Engineer":
+      return "Automotive test and validation professional";
+    case "Engineering Professional":
+      return "Engineering-focused technical professional";
+    case "Modern Compact":
+      return "Testing and quality professional";
     default:
-      return "ATS-focused testing and quality candidate";
+      return "ATS-focused testing and validation candidate";
   }
 }
 
@@ -107,6 +109,14 @@ function measurableWarning(profile: UserProfile) {
   return /\d|%|\$|reduced|improved|increased|decreased|saved|completed|documented/i.test(profile.experience);
 }
 
+function projectsOrTools(profile: UserProfile, skills: string[]) {
+  return unique([...(profile.parsedResume?.toolsTechnologies ?? []), ...skills.filter((skill) => /jira|python|can|lin|sql|labview|matlab|excel|selenium|oscilloscope/i.test(skill))]).slice(0, 8);
+}
+
+function education(profile: UserProfile) {
+  return unique([...(profile.parsedResume?.education ?? []), ...(profile.parsedResume?.certifications ?? [])]).slice(0, 5);
+}
+
 export function buildResumeStudio(profile: UserProfile, job: JobPosting, generated: GeneratedApplication, options: ResumeStudioOptions): ResumeStudioOutput {
   const relevantSkills = selectRelevantSkills(profile, job);
   const jobKeywords = unique([...job.requiredSkills, ...(job.preferredSkills ?? [])]).slice(0, 18);
@@ -124,6 +134,8 @@ export function buildResumeStudio(profile: UserProfile, job: JobPosting, generat
     .map((line) => line.trim())
     .filter(Boolean)
     .slice(0, pageLimit);
+  const toolRows = projectsOrTools(profile, relevantSkills);
+  const educationRows = education(profile);
 
   const resumePlainText = `${profile.name}
 ${profile.email} | ${profile.location}
@@ -136,6 +148,12 @@ ${relevantSkills.map((skill) => `- ${skill}`).join("\n")}
 
 EXPERIENCE
 ${experienceLines.map((line) => `- ${line}`).join("\n")}
+
+TOOLS / PROJECTS
+${toolRows.length ? toolRows.map((tool) => `- ${tool}`).join("\n") : "- Add verified tools, labs, projects, or test equipment here."}
+
+EDUCATION / CERTIFICATIONS
+${educationRows.length ? educationRows.map((item) => `- ${item}`).join("\n") : "- Add verified education or certifications here if relevant."}
 
 TARGETED FIT
 ${job.whyMatches.slice(0, 5).map((reason) => `- ${reason}`).join("\n")}
@@ -162,7 +180,7 @@ Thank you for your time and consideration.
 
 ${profile.name}`;
 
-  const resumeTex = buildResumeTex(profile, job, summary, relevantSkills, experienceLines, bullets, missingKeywords, options);
+  const resumeTex = buildResumeTex(profile, job, summary, relevantSkills, experienceLines, bullets, missingKeywords, toolRows, educationRows, options);
   const coverLetterTex = buildCoverLetterTex(profile, job, coverLetterPlainText, options);
   const warnings = [
     "Review every line before submitting.",
@@ -173,8 +191,8 @@ ${profile.name}`;
   const recommendations = [
     ...(missingKeywords.length ? [`Review missing keywords: ${missingKeywords.slice(0, 5).join(", ")}.`] : []),
     ...(measurableWarning(profile) ? [] : ["Add measurable, truthful accomplishments to improve credibility."]),
-    "Keep the resume to one page for technician/early-career roles unless your verified experience needs two pages.",
-    "Use the ATS template for online portals and a role-specific template for direct recruiter outreach."
+    "Keep the resume to one page for technician/early-career roles unless verified experience needs two pages.",
+    "Use ATS Clean for online portals and Automotive/Test Engineer or Engineering Professional for recruiter outreach."
   ];
 
   return {
@@ -183,8 +201,8 @@ ${profile.name}`;
     resumeTex,
     coverLetterTex,
     score: {
-      atsScore: clamp(58 + keywordCoverage * 0.28 + relevantSkills.length * 2),
-      readabilityScore: clamp(options.template === "ATS Optimized" ? 90 : 82),
+      atsScore: clamp(62 + keywordCoverage * 0.25 + relevantSkills.length * 1.8 + (options.template === "ATS Clean" ? 6 : 0)),
+      readabilityScore: clamp(options.template === "ATS Clean" ? 92 : options.template === "Modern Compact" ? 88 : 84),
       matchScore: job.matchScore,
       keywordCoverage,
       missingKeywords,
@@ -194,11 +212,13 @@ ${profile.name}`;
       { section: "Summary", why: `Rewritten for ${job.title} and the ${options.template} template.` },
       { section: "Core Skills", why: "Prioritizes profile skills that overlap with the job description first." },
       { section: "Experience", why: "Uses verified profile experience only; no invented bullets are inserted." },
-      { section: "Targeted Fit", why: "Shows why the role matches your saved preferences and skills." },
-      { section: "Editable Bullet Improvements", why: "Highlights where you should add truthful metrics or stronger phrasing." }
+      { section: "Tools / Projects", why: "Highlights relevant tools, labs, and technical keywords when present." },
+      { section: "Education / Certifications", why: "Included only when parsed or saved profile data contains verified education/certification signals." }
     ],
     bulletSuggestions: bullets,
-    warnings
+    warnings,
+    projectsOrTools: toolRows,
+    education: educationRows
   };
 }
 
@@ -206,63 +226,89 @@ function latexList(items: string[]) {
   return items.length ? items.map((item) => `  \\item ${escapeLatex(item)}`).join("\n") : "  \\item Add verified details here.";
 }
 
-function buildResumeTex(profile: UserProfile, job: JobPosting, summary: string, skills: string[], experienceLines: string[], bullets: string[], missingKeywords: string[], options: ResumeStudioOptions) {
+function sectionColor(template: ResumeTemplate) {
+  if (template === "Automotive/Test Engineer") return "0B5394";
+  if (template === "Engineering Professional") return "1F4E79";
+  if (template === "Modern Compact") return "4F46E5";
+  return "111827";
+}
+
+function buildResumeTex(profile: UserProfile, job: JobPosting, summary: string, skills: string[], experienceLines: string[], bullets: string[], missingKeywords: string[], tools: string[], educationRows: string[], options: ResumeStudioOptions) {
+  const color = sectionColor(options.template);
+  const compact = options.pageLength === "one-page";
   return `\\documentclass[10pt]{article}
-\\usepackage[margin=0.65in]{geometry}
+\\usepackage[margin=0.58in]{geometry}
 \\usepackage{enumitem}
+\\usepackage{titlesec}
 \\usepackage[hidelinks]{hyperref}
+\\usepackage{xcolor}
+\\usepackage{tabularx}
+\\definecolor{accent}{HTML}{${color}}
 \\setlength{\\parindent}{0pt}
-\\setlist[itemize]{leftmargin=*, noitemsep, topsep=2pt}
+\\setlength{\\parskip}{2pt}
+\\pagenumbering{gobble}
+\\titleformat{\\section}{\\large\\bfseries\\color{accent}}{}{0em}{}[\\titlerule]
+\\titlespacing*{\\section}{0pt}{${compact ? "6pt" : "9pt"}}{${compact ? "3pt" : "5pt"}}
+\\setlist[itemize]{leftmargin=*, noitemsep, topsep=2pt, parsep=0pt}
 
 \\begin{document}
 
 % ===== EDITABLE HEADER =====
-{\\Large \\textbf{${escapeLatex(profile.name)}}}\\\\
-${escapeLatex(profile.email)} \\textbar{} ${escapeLatex(profile.location)}
+\\begin{center}
+{\\LARGE \\textbf{${escapeLatex(profile.name)}}}\\\\
+\\vspace{2pt}
+${escapeLatex(profile.email)} \\; \\textbullet \\; ${escapeLatex(profile.location)} \\; \\textbullet \\; Target: ${escapeLatex(job.title)}
+\\end{center}
 
-\\vspace{6pt}
-% ===== TARGET ROLE: ${escapeLatex(job.title)} at ${escapeLatex(job.company)} =====
-\\textbf{Professional Summary}\\\\
+% ===== EDITABLE SUMMARY: tailored for ${escapeLatex(job.company)} =====
+\\section*{Professional Summary}
 ${escapeLatex(summary)}
 
-\\vspace{6pt}
-% ===== EDITABLE SKILLS: prioritize truthful skills only =====
-\\textbf{Core Skills}
-\\begin{itemize}
-${latexList(skills.slice(0, options.pageLength === "one-page" ? 10 : 14))}
-\\end{itemize}
+% ===== EDITABLE SKILLS: keep only truthful skills =====
+\\section*{Core Skills}
+\\begin{tabularx}{\\textwidth}{@{}X X@{}}
+${skills.slice(0, compact ? 10 : 14).map((skill, index, arr) => index % 2 === 0 ? `${escapeLatex(skill)}${arr[index + 1] ? ` & ${escapeLatex(arr[index + 1])} \\\\` : " \\\\"}` : "").filter(Boolean).join("\n")}
+\\end{tabularx}
 
-\\vspace{4pt}
-% ===== EDITABLE EXPERIENCE: replace suggestions with verified accomplishments =====
-\\textbf{Experience Highlights}
+% ===== EDITABLE EXPERIENCE: replace with verified accomplishments =====
+\\section*{Experience Highlights}
 \\begin{itemize}
 ${latexList(experienceLines)}
 \\end{itemize}
 
-\\vspace{4pt}
-% ===== WHY THIS RESUME WAS TAILORED =====
-\\textbf{Targeted Fit}
+% ===== TOOLS / PROJECTS: include only tools you can discuss =====
+\\section*{Tools \\& Projects}
+\\begin{itemize}
+${latexList(tools.length ? tools : ["Add verified tools, labs, projects, or test equipment here."])}
+\\end{itemize}
+
+% ===== EDUCATION / CERTIFICATIONS: remove if not applicable =====
+\\section*{Education \\& Certifications}
+\\begin{itemize}
+${latexList(educationRows.length ? educationRows : ["Add verified education or certifications here if relevant."])}
+\\end{itemize}
+
+% ===== TARGETED FIT: why MomentumAI included these points =====
+\\section*{Targeted Fit for ${escapeLatex(job.company)}}
 \\begin{itemize}
 ${latexList(job.whyMatches.slice(0, 5))}
 \\end{itemize}
 
-\\vspace{4pt}
 % ===== BULLET IMPROVEMENT IDEAS: do not submit until edited for accuracy =====
-\\textbf{Bullet Improvement Ideas}
-\\begin{itemize}
-${latexList(bullets.slice(0, 5))}
-\\end{itemize}
-
-% ===== OPTIONAL KEYWORDS TO REVIEW =====
-% Missing/optional keywords: ${escapeLatex(missingKeywords.join(", ") || "None detected")}
+% ${bullets.map(escapeLatex).join("\n% ")}
+% Missing/optional keywords to review: ${escapeLatex(missingKeywords.join(", ") || "None detected")}
 
 \\end{document}
 `;
 }
 
 function buildCoverLetterTex(profile: UserProfile, job: JobPosting, coverLetter: string, options: ResumeStudioOptions) {
+  const color = sectionColor(options.template);
   return `\\documentclass[11pt]{letter}
 \\usepackage[margin=0.85in]{geometry}
+\\usepackage{xcolor}
+\\usepackage[hidelinks]{hyperref}
+\\definecolor{accent}{HTML}{${color}}
 \\signature{${escapeLatex(profile.name)}}
 \\address{${escapeLatex(profile.name)}\\\\${escapeLatex(profile.email)}\\\\${escapeLatex(profile.location)}}
 
