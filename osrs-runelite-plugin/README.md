@@ -19,14 +19,14 @@ src/test/java/com/momentum/osrs/
 ## Requirements
 
 - Java 11 or newer
-- Gradle, or an IDE with Gradle support
+- The included Gradle wrapper, or an IDE with Gradle support
 
 ## Run locally
 
 From this directory:
 
 ```sh
-gradle run
+./gradlew run
 ```
 
 The `run` task starts RuneLite in developer mode with Momentum Helper loaded as a built-in external plugin.
