@@ -8,5 +8,5 @@ This repo also includes **[rs3-companion](./rs3-companion/)**, a RuneLite-style 
 
 ## OSRS RuneLite Plugin
 
-The repo now includes **[osrs-runelite-plugin](./osrs-runelite-plugin/)**, a starter external RuneLite plugin for Old School RuneScape. It currently provides a configurable login reminder and a Gradle developer launcher so we can build out OSRS helper features safely.
+The repo now includes **[osrs-runelite-plugin](./osrs-runelite-plugin/)**, an external RuneLite plugin for Old School RuneScape. Bank Gear Helper scans owned bank items and recommends monster gear setups for bosses and Slayer monsters from built-in presets.
 
