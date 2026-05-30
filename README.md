@@ -6,3 +6,7 @@ MomentumAI is an AI-powered job copilot built for test engineers, engineering te
 
 This repo also includes **[rs3-companion](./rs3-companion/)**, a RuneLite-style desktop companion for RuneScape 3 with quest helper, RuneMetrics sync, and an Alt1-inspired overlay. See the [RS3 Companion README](./rs3-companion/README.md) for setup and usage.
 
+## OSRS RuneLite Plugin
+
+The repo now includes **[osrs-runelite-plugin](./osrs-runelite-plugin/)**, a starter external RuneLite plugin for Old School RuneScape. It currently provides a configurable login reminder and a Gradle developer launcher so we can build out OSRS helper features safely.
+
